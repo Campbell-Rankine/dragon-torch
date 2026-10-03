@@ -19,7 +19,7 @@ from typing import Any, Callable, Generic, Optional, TypeVar
 from torch.utils.data import DataLoader, Dataset
 
 from .sources import build_source
-from .config import SourceConfig, LoaderConfig, _Config
+from .config import SourceConfig, LoaderConfig, _Config, DatasetConfig
 
 
 # --------------------------------------------------------------------------- #
@@ -27,12 +27,6 @@ from .config import SourceConfig, LoaderConfig, _Config
 # --------------------------------------------------------------------------- #
 ConfigT = TypeVar("ConfigT", bound=DatasetConfig)
 SampleT = TypeVar("SampleT", covariant=True)
-
-
-class DatasetConfig(_Config):
-    """Subclass this for task-specific fields (image size, tokenizer, etc.)."""
-    source: SourceConfig
-    loader: LoaderConfig = LoaderConfig()
 
 
 class BaseDataset(Dataset[SampleT], ABC, Generic[ConfigT, SampleT]):

@@ -1,15 +1,6 @@
 from pydantic import BaseModel
 from typing import Union, Literal, Annotated
 import os
-
-"""Base data-loading primitives: pydantic configs, pluggable sources, base dataset.
- 
-Suggested layout once this grows:
-    mylib/data/config.py    -> configs
-    mylib/data/sources.py   -> Source ABC, registry, DiskSource, HTTPSource
-    mylib/data/datasets.py  -> BaseDataset
-    mylib/data/loaders.py   -> build_dataloader
-"""
 from __future__ import annotations
 
 import random

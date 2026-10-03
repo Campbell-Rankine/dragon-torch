@@ -86,3 +86,9 @@ class LoaderConfig(_Config):
             raise ValueError(
                 "prefetch_factor / persistent_workers require num_workers > 0")
         return self
+
+
+class DatasetConfig(_Config):
+    """Subclass this for task-specific fields (image size, tokenizer, etc.)."""
+    source: SourceConfig
+    loader: LoaderConfig = LoaderConfig()
