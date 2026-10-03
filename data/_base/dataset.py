@@ -15,12 +15,11 @@ import numpy as np
 import torch
 import random
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Annotated, Any, Callable, ClassVar, Generic, Optional, TypeVar
+from typing import Any, Callable, Generic, Optional, TypeVar
 from torch.utils.data import DataLoader, Dataset
 
 from .sources import build_source
-from .config import SourceConfig, DiskSourceConfig, LoaderConfig, _Config
+from .config import SourceConfig, LoaderConfig, _Config
 
 
 # --------------------------------------------------------------------------- #
@@ -57,6 +56,8 @@ class BaseDataset(Dataset[SampleT], ABC, Generic[ConfigT, SampleT]):
     @abstractmethod
     def decode(self, raw: bytes, key: str) -> SampleT:
         """Turn raw bytes into a sample (tensor / dict of tensors / numpy)."""
+        raise NotImplementedError(
+            f"Not implemented for type={self.__class__.__name__}")
 
     def collate_fn(self, batch: list[SampleT]) -> Any:
         """Override for custom batching (padding, ragged data, jax arrays, ...)."""
