@@ -11,6 +11,7 @@ from common.types import DeviceLike, NumpyDatasetAllowedDtypes, DefaultNumpyDtyp
 from data._base.dataset import BaseDataset
 from data._base.config import DatasetConfig
 from data.backends._numpy.types import NumpyOnlyOutputDtypes, NumpyTorchOutputDtypes
+from data.backends._numpy.modules import NumpySourceConfig, NumpyLoaderConfig, NumpyDiskSource
 
 # output types
 type NumpyDatasetOutputDtypes = Union[NumpyOnlyOutputDtypes,
@@ -35,6 +36,8 @@ def build_numpy_dataset(cfg: NumpyDatasetConfigType) -> NumpyDataset:
 class NumpyDatasetConfig(DatasetConfig):
     output_type: NumpyDatasetOutputDtypes
     dtype: NumpyDatasetAllowedDtypes = DefaultNumpyDtype
+    source: NumpyDiskSource
+    loader: NumpyLoaderConfig
 
 
 class _NumpyDataset(BaseDataset[NumpyDatasetConfig, np.ndarray]):

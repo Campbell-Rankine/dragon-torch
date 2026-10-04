@@ -1,12 +1,12 @@
 from pydantic import BaseModel
-from typing import Union, Literal, Annotated
+from typing import Union, Literal, Annotated, Generic
 import os
 from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 from .config import DiskSourceConfig, HTTPSourceConfig
 from common.types import FileExtensionLike
 
@@ -14,12 +14,14 @@ from common.types import FileExtensionLike
 def build_source(cfg: DiskSourceConfig | HTTPSourceConfig) -> Source:
     return Source._registry[cfg.kind](cfg)
 
+
 # --------------------------------------------------------------------------- #
 # Sources: "where do bytes come from". Dataset code never knows which one.
 # --------------------------------------------------------------------------- #
+ConfigT = TypeVar("ConfigT", covariant=True)
 
 
-class Source(ABC):
+class Source(ABC, Generic[ConfigT]):
     kind: ClassVar[str]
     file_ext: ClassVar[FileExtensionLike]
     _registry: ClassVar[dict[str, type["Source"]]] = {}
@@ -28,8 +30,6 @@ class Source(ABC):
         super().__init_subclass__(**kw)
         if hasattr(cls, "kind"):
             Source._registry[cls.kind] = cls
-        if hasattr(cls, "file_ext"):
-            Source._registry[cls.file_ext] = cls
 
     @abstractmethod
     def list_keys(self) -> list[str]: ...
@@ -38,11 +38,11 @@ class Source(ABC):
     def read(self, key: str) -> bytes: ...
 
 
-class DiskSource(Source):
+class DiskSource(Source[DiskSourceConfig]):
     kind = "disk"
     file_ext = [None]
 
-    def __init__(self, cfg: DiskSourceConfig):
+    def __init__(self, cfg: ConfigT):
         self.cfg = cfg
 
     def list_keys(self) -> list[str]:
@@ -63,11 +63,11 @@ class DiskSource(Source):
         return path.read_bytes()
 
 
-class HTTPSource(Source):
+class HTTPSource(Source[HTTPSourceConfig]):
     kind = "http"
     file_ext = ['.json']
 
-    def __init__(self, cfg: HTTPSourceConfig):
+    def __init__(self, cfg: ConfigT):
         self.cfg = cfg
         self._session = None  # created lazily, once per worker process
 

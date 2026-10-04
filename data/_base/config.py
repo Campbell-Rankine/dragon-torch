@@ -1,15 +1,5 @@
-from pydantic import BaseModel
-from typing import Union, Literal, Annotated
+from pydantic import BaseModel, AfterValidator
 import os
-
-"""Base data-loading primitives: pydantic configs, pluggable sources, base dataset.
- 
-Suggested layout once this grows:
-    mylib/data/config.py    -> configs
-    mylib/data/sources.py   -> Source ABC, registry, DiskSource, HTTPSource
-    mylib/data/datasets.py  -> BaseDataset
-    mylib/data/loaders.py   -> build_dataloader
-"""
 from __future__ import annotations
 
 import random
@@ -21,11 +11,13 @@ import numpy as np
 import torch
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from torch.utils.data import DataLoader, Dataset
-
+from common.utils import build_path, PathLike
 
 # --------------------------------------------------------------------------- #
 # Configs (pydantic v2): frozen + extra="forbid" so typos fail loudly
 # --------------------------------------------------------------------------- #
+
+
 class _Config(BaseModel):
     model_config = ConfigDict(
         frozen=True, extra="forbid", validate_default=True)
@@ -34,9 +26,9 @@ class _Config(BaseModel):
 type DiskSourceKind = Literal['disk']
 
 
-class DiskSourceConfig(_Config):
+class _DiskSourceConfig(_Config):
     kind: DiskSourceKind = "disk"
-    root: Path
+    root: PathLike
     pattern: str = "**/*"
     extensions: Optional[tuple[str, ...]] = None
 
@@ -71,6 +63,8 @@ class HTTPSourceConfig(_Config):
 
 
 # Discriminated union: pydantic picks the right model from `kind`, with clear errors.
+DiskSourceConfig = Annotated[_DiskSourceConfig,
+                             AfterValidator(lambda x: build_path(x.root))]
 SourceConfig = Annotated[Union[DiskSourceConfig,
                                HTTPSourceConfig], Field(discriminator="kind")]
 
