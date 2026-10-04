@@ -31,8 +31,11 @@ class _Config(BaseModel):
         frozen=True, extra="forbid", validate_default=True)
 
 
+type DiskSourceKind = Literal['disk']
+
+
 class DiskSourceConfig(_Config):
-    kind: Literal["disk"] = "disk"
+    kind: DiskSourceKind = "disk"
     root: Path
     pattern: str = "**/*"
     extensions: Optional[tuple[str, ...]] = None
@@ -46,8 +49,11 @@ class DiskSourceConfig(_Config):
         return v
 
 
+type HTTPSourceKind = Literal['http']
+
+
 class HTTPSourceConfig(_Config):
-    kind: Literal["http"] = "http"
+    kind: HTTPSourceKind = "http"
     base_url: str
     # relative paths appended to base_url
     keys: tuple[str, ...] = Field(min_length=1)

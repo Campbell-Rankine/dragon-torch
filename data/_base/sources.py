@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar
 from .config import DiskSourceConfig, HTTPSourceConfig
+from common.types import FileExtensionLike
 
 
 def build_source(cfg: DiskSourceConfig | HTTPSourceConfig) -> Source:
@@ -20,12 +21,15 @@ def build_source(cfg: DiskSourceConfig | HTTPSourceConfig) -> Source:
 
 class Source(ABC):
     kind: ClassVar[str]
+    file_ext: ClassVar[FileExtensionLike]
     _registry: ClassVar[dict[str, type["Source"]]] = {}
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)
         if hasattr(cls, "kind"):
             Source._registry[cls.kind] = cls
+        if hasattr(cls, "file_ext"):
+            Source._registry[cls.file_ext] = cls
 
     @abstractmethod
     def list_keys(self) -> list[str]: ...
@@ -36,6 +40,7 @@ class Source(ABC):
 
 class DiskSource(Source):
     kind = "disk"
+    file_ext = [None]
 
     def __init__(self, cfg: DiskSourceConfig):
         self.cfg = cfg
@@ -60,6 +65,7 @@ class DiskSource(Source):
 
 class HTTPSource(Source):
     kind = "http"
+    file_ext = ['.json']
 
     def __init__(self, cfg: HTTPSourceConfig):
         self.cfg = cfg
