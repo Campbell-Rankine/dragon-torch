@@ -1,17 +1,14 @@
 import torch
 import numpy as np
-from pydantic import BaseModel
-from typing import Union, Literal, Annotated
-import os
+from typing import Union
 from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 from common.types import DeviceLike, NumpyDatasetAllowedDtypes, DefaultNumpyDtype
-from data._base.dataset import BaseDataset, SampleT, ConfigT
+from data._base.dataset import BaseDataset
 from data._base.config import DatasetConfig
 from data.backends._numpy.types import NumpyOnlyOutputDtypes, NumpyTorchOutputDtypes
 
@@ -76,7 +73,7 @@ class NumpyFloat64DatasetConfig(NumpyDatasetConfig):
     output_type: NumpyOnlyOutputDtypes = np.floating
 
 
-class NumpyFloat64Dataset(_NumpyDataset):
+class NumpyFloat64Dataset(NumpyDataset):
     dtype: NumpyDatasetAllowedDtypes = "float64"
     output_type: NumpyOnlyOutputDtypes = np.floating
 
@@ -86,7 +83,7 @@ class NumpyFloat32DatasetConfig(NumpyDatasetConfig):
     output_type: NumpyOnlyOutputDtypes = np.floating
 
 
-class NumpyFloat32Dataset(_NumpyDataset):
+class NumpyFloat32Dataset(NumpyDataset):
     dtype: NumpyDatasetAllowedDtypes = "float32"
     output_type: NumpyOnlyOutputDtypes = np.floating
 
@@ -96,7 +93,7 @@ class NumpyFloat16DatasetConfig(NumpyDatasetConfig):
     output_type: NumpyOnlyOutputDtypes = np.floating
 
 
-class NumpyFloat16Dataset(_NumpyDataset):
+class NumpyFloat16Dataset(NumpyDataset):
     dtype: NumpyDatasetAllowedDtypes = "float16"
     output_type: NumpyOnlyOutputDtypes = np.floating
 
@@ -106,7 +103,7 @@ class NumpyInt32DatasetConfig(NumpyDatasetConfig):
     output_type: NumpyOnlyOutputDtypes = np.integer
 
 
-class NumpyInt32Dataset(_NumpyDataset):
+class NumpyInt32Dataset(NumpyDataset):
     dtype: NumpyDatasetAllowedDtypes = 'int32'
     output_type: NumpyOnlyOutputDtypes = np.integer
 
@@ -116,7 +113,7 @@ class NumpyInt64DatasetConfig(NumpyDatasetConfig):
     output_type: NumpyOnlyOutputDtypes = np.integer
 
 
-class NumpyInt64Dataset(_NumpyDataset):
+class NumpyInt64Dataset(NumpyDataset):
     dtype: NumpyDatasetAllowedDtypes = 'int64'
     output_type: NumpyOnlyOutputDtypes = np.integer
 
