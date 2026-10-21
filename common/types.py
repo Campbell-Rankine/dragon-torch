@@ -1,3 +1,4 @@
+from common.torch.types import DeviceLike, TorchFloatKind, TorchIntegerKind
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -12,14 +13,10 @@ type PathLike = Union[Path, str]
 # ------- DatasetDefinition ------- #
 type BackendTypes = Union[Literal['jax'],
                           Literal['numpy'], Literal['pandas'], Literal['torch']]
-
-# ------- NumpyDataset Types ------- #
-
-DefaultNumpyDtype = numpy_default_dtype
-type NumpyDatasetAllowedDtypes = Union[Literal['float64'],
-                                       Literal['float32'], Literal['float16'], Literal['int32'], Literal['int64']]
+type DatasetSplitType = Union[Literal['train'],
+                              Literal['test'], Literal['validation']]
 
 
 # ------- Torch Types ------- #
-type DeviceLike = Union[Literal['cpu'], Literal['cuda']]
+type TorchNumeric = Union[TorchIntegerKind, TorchFloatKind]
 type FileExtensionLike = List[str | None]

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "accelerate>=1.15.0",
+    "datasets>=5.1.0",
     "jax",
     "pydantic>=2.13.5",
     "requests>=2.34.2",
