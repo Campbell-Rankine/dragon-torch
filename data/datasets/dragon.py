@@ -30,7 +30,7 @@ class _Dataset(Dataset, ABC, Generic[SourceType, ItemDtype]):
     def __getitem__(self, identifier: Union[int, str]) -> ItemDtype: ...
 
 
-class DragonDataset(Generic[SourceType, ItemDtype]):
+class DragonDataset(_Dataset[SourceType, ItemDtype], Generic[SourceType, ItemDtype]):
     def __init__(self, source_kind: SourceKind, source_cfg: SourceConfig):
         self.source = source_factory(source_cfg, kind=source_kind)
         self.kind = source_kind
