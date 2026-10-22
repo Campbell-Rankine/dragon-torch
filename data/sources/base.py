@@ -36,7 +36,7 @@ class Source(ABC, Generic[OutputType]):
     def __len__(self) -> int: ...
 
     @abstractmethod
-    def __getitem__(self, identifier: Union[int, str]) -> OutputType: ...
+    def read(self) -> OutputType: ...
 
 
 # Standard disk source
@@ -61,20 +61,19 @@ class DiskSource(Source[SourceOutput[SourceType]], Generic[SourceType]):
         self.config = config
         self.file_length = None
 
-    def _load_from_dir(self, identifier: ItemType) -> dict:
+    def _load_from_dir(self) -> dict:
+        result = {}
+        for fpath in os.listdir(self.config.loc):
+            name: str = fpath.split('/')[-1].split('.')[0]
+            with open(fpath, 'rb' if self.config.read_bytes else 'r') as file:
+                result[name] = self.config.load_fn(file)
+        return result
+
+    def _load_from_single_file(self) -> dict:
         _fpath = self.config.loc if isinstance(
             self.config.loc, Path) else Path(self.config.loc)
-        _fpath = _fpath / f"{identifier}.{self.config.ext.replace('.', '')}"
         with open(_fpath, 'rb' if self.config.read_bytes else 'r') as file:
             return self.config.load_fn(file)
-
-    def _load_from_single_file(self, identifier: BatchType) -> dict:
-        _fpath = self.config.loc if isinstance(
-            self.config.loc, Path) else Path(self.config.loc)
-        if not isinstance(identifier, list):
-            identifier = [identifier]
-        with open(_fpath, 'rb' if self.config.read_bytes else 'r') as file:
-            return self.config.load_fn(file)[identifier]
 
     def _get_length_for_directory(self) -> int:
         return len(os.listdir(self.config.loc))
@@ -96,9 +95,6 @@ class DiskSource(Source[SourceOutput[SourceType]], Generic[SourceType]):
             case False:
                 return self._get_length_for_directory()
 
-    def __getitem__(self, identifier: Union[int, str]):
-        output = SourceOutput(identifier=identifier)
-        data = self._load_from_dir(
-            identifier) if not self.config.single_file else self._load_from_single_file(identifier)
-        output.update(data)
-        return output
+    def read(self):
+        data = self._load_from_dir() if not self.config.single_file else self._load_from_single_file()
+        return data

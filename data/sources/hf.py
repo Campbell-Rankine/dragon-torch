@@ -1,5 +1,6 @@
 from typing import Union, Literal, Any, Callable, Annotated
 from pydantic import BaseModel, AfterValidator
+from datasets import Dataset
 import torch as T
 from functools import cache
 import os
@@ -13,10 +14,10 @@ type HFSourceKind = Union[Literal['hugging-face'],
                           Literal['hugging-face-polars']]
 
 
-class HFSourceConfig(SourceConfig):
+class HFSourceConfig(BaseModel):
     name: str
     repository: str
-    options: dict[str, Any]
+    options: list[Any]
     device: DeviceLike
     dtype: TorchNumeric
     split: DatasetSplitType
@@ -25,6 +26,7 @@ class HFSourceConfig(SourceConfig):
     _fmt: HF_Formats = 'torch'
     kind: HFSourceKind = 'hugging-face'
     bearer: str = None
+    stream_from_hf: bool = True
     keep_dataset_in_memory: bool = False
 
 
@@ -50,7 +52,7 @@ def apply_device_and_dtype(x: _HFSourceOutput) -> _HFSourceOutput:
 
 
 HFSourceOutput = Annotated[_HFSourceOutput,
-                           AfterValidator(lambda x: apply_device_and_dtype(x))]
+                           lambda x: apply_device_and_dtype(x)]
 
 
 class _HFPolarsOutput(SourceOutput[dict[str, Union[T.Tensor, np.ndarray]]]):
@@ -70,8 +72,7 @@ def convert_np_to_tensor(x: _HFPolarsOutput) -> _HFPolarsOutput:
     return x
 
 
-HFPolarsOutput = Annotated[_HFPolarsOutput,
-                           AfterValidator(lambda x: convert_np_to_tensor(x))]
+HFPolarsOutput = Annotated[_HFPolarsOutput, lambda x: convert_np_to_tensor(x)]
 
 ### HF Source Classes ###
 
@@ -79,10 +80,10 @@ HFPolarsOutput = Annotated[_HFPolarsOutput,
 @cache
 def load_hf_dataset(cfg: Union[HFSourceConfig, HFPolarsSourceConfig]):
     from datasets import load_dataset
-    return load_dataset(cfg.repository, split=cfg.split, cache_dir=cfg.download_path, keep_in_memory=cfg.keep_dataset_in_memory, **cfg.options)
+    return load_dataset(cfg.repository, *cfg.options, split=cfg.split, cache_dir=cfg.download_path, keep_in_memory=cfg.keep_dataset_in_memory, streaming=cfg.stream_from_hf)
 
 
-class HuggingFaceSource(Source[HFSourceOutput]):
+class HuggingFaceSource(Source[Dataset]):
     kind: str = "hugging-face"
 
     def __init__(self, cfg: HFSourceConfig):
@@ -98,14 +99,13 @@ class HuggingFaceSource(Source[HFSourceOutput]):
     def __len__(self):
         return self._query_hf_dataset_length()
 
-    def __getitem__(self, identifier: Any) -> HFSourceOutput:
-        ds = load_hf_dataset(self.cfg).__getitem__(identifier)
-        output = HFSourceOutput(
-            **ds, identifier=identifier, device=self.cfg.device, dtype=self.cfg.dtype)
-        return output
+    @cache
+    def read(self) -> Dataset:
+        ds = load_hf_dataset(self.cfg)
+        return ds
 
 
-class HuggingFacePolarsSource(Source[HFPolarsOutput]):
+class HuggingFacePolarsSource(Source[Dataset]):
     kind: str = "hugging-face-polars"
 
     def __init__(self, cfg: HFPolarsSourceConfig):
@@ -121,8 +121,6 @@ class HuggingFacePolarsSource(Source[HFPolarsOutput]):
     def __len__(self):
         return self._query_hf_dataset_length()
 
-    def __getitem__(self, identifier: Any) -> HFPolarsOutput:
-        ds = load_hf_dataset(self.cfg).__getitem__(identifier)
-        output = HFPolarsOutput(**ds, identifier=identifier, as_tensor=self.cfg.as_tensor,
-                                device=self.cfg.device, dtype=self.cfg.dtype)
-        return output
+    def read(self, identifier: Any) -> Dataset:
+        ds = load_hf_dataset(self.cfg)
+        return ds

@@ -9,6 +9,7 @@ dependencies = [
     "datasets>=5.1.0",
     "jax",
     "pydantic>=2.13.5",
+    "python-dotenv>=1.2.4",
     "requests>=2.34.2",
     "torch",
     "torchvision",
