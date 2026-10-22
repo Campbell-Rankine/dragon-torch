@@ -4,6 +4,7 @@ import os
 from common.types import PathLike, Path
 from abc import ABC, abstractmethod
 from uuid import uuid4
+from templates.base_classes import DragonBaseClass
 
 SourceType = TypeVar('SourceType', covariant=True)
 OutputType = TypeVar('OutputType', covariant=True)
@@ -21,16 +22,7 @@ def source_factory(cfg, kind=None):
     return Source._registry[_kind](cfg)
 
 
-class Source(ABC, Generic[OutputType]):
-    kind: ClassVar[str]
-    _registry: ClassVar[dict[str, type["Source"]]] = {}
-
-    def __init_subclass__(cls, **kw: Any) -> None:
-        super().__init_subclass__(**kw)
-        if hasattr(cls, "kind"):
-            Source._registry[cls.kind] = cls
-        else:
-            Source._registry[cls.__name__] = cls
+class Source(DragonBaseClass, Generic[OutputType]):
 
     @abstractmethod
     def __len__(self) -> int: ...

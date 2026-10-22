@@ -77,7 +77,6 @@ HFPolarsOutput = Annotated[_HFPolarsOutput, lambda x: convert_np_to_tensor(x)]
 ### HF Source Classes ###
 
 
-@cache
 def load_hf_dataset(cfg: Union[HFSourceConfig, HFPolarsSourceConfig]):
     from datasets import load_dataset
     return load_dataset(cfg.repository, *cfg.options, split=cfg.split, cache_dir=cfg.download_path, keep_in_memory=cfg.keep_dataset_in_memory, streaming=cfg.stream_from_hf)
@@ -99,7 +98,6 @@ class HuggingFaceSource(Source[Dataset]):
     def __len__(self):
         return self._query_hf_dataset_length()
 
-    @cache
     def read(self) -> Dataset:
         ds = load_hf_dataset(self.cfg)
         return ds
