@@ -7,14 +7,15 @@ from datasets import Dataset
 
 from common.types import PathLike, Path
 from data.sources import Source, SourceConfig, SourceKind, source_factory
-from templates.base_classes import DragonBaseClass
 
 SourceType = TypeVar('SourceType', covariant=True)
 ItemDtype = TypeVar('BatcherType', covariant=True)
 
 
-class _Dataset(DragonBaseClass, Generic[SourceType, ItemDtype]):
+class _Dataset(Dataset, ABC, Generic[SourceType, ItemDtype]):
+    kind: ClassVar[str]
     data: ClassVar[Any] = None
+    _registry: ClassVar[dict[str, type["_Dataset"]]] = {}
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)

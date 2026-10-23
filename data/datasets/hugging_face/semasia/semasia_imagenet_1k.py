@@ -6,31 +6,19 @@ from dotenv import load_dotenv
 from common.types import TorchNumeric, DeviceLike, DatasetSplitType, PathLike
 from data.sources.hf import HuggingFaceSource, HFSourceConfig
 from typing import Union, Literal, Any
+from data.datasets.hugging_face.semasia.config import SemasiaSourceConfig, extract_semasia_dataset
 
 load_dotenv('./.env')
 
 type SemasiaItemDtype = dict[str, torch.Tensor]
 
 
-def extract_semasia_dataset(ds: Dataset) -> dict[str, torch.Tensor]:
-    return {'embeddings': torch.vstack(list(ds['embedding'])), 'labels': torch.Tensor(ds['celeb_id'])}
+class SemasiaImagenet1kSourceConfig(SemasiaSourceConfig):
+    name: str = "semasia-imagenet-1k"
+    repository: str = "spaicom-lab/semasia-imagenet-1k"
 
 
-class SemasiaSourceConfig(HFSourceConfig):
-    name: str = "semasia-celeba"
-    repository: str = "spaicom-lab/semasia-celeba"
-    options: list = []
-    device: DeviceLike = 'cpu'
-    dtype: TorchNumeric = 'float64'
-    split: DatasetSplitType = 'train'
-    download_path: PathLike = os.getenv('DATASET_CACHE_DIR')
-    post_process = extract_semasia_dataset
-
-    def set_model(self, model_id: str):
-        setattr(self, 'options', [model_id])
-
-
-class SemasiaCeleba(DragonDataset[HuggingFaceSource, SemasiaItemDtype]):
+class SemasiaImagenet1k(DragonDataset[HuggingFaceSource, SemasiaItemDtype]):
     kind = 'hugging-face'
 
     def __init__(self, cfg: SemasiaSourceConfig):
@@ -47,7 +35,7 @@ class SemasiaCeleba(DragonDataset[HuggingFaceSource, SemasiaItemDtype]):
         return super().__getitem__(identifier)
 
 
-class SemasiaCelebaSingleModel(SemasiaCeleba):
+class SemasiaCelebaSingleModel(SemasiaImagenet1k):
     def __init__(self, cfg: SemasiaSourceConfig, model_name: str = "aimv2_1b_patch14_224.apple_pt"):
         super().__init__(cfg)
         self.model_name = model_name
