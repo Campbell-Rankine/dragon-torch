@@ -5,34 +5,37 @@ description = "PyTorch Deep Learning Research framework"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "accelerate>=1.15.0",
-    "datasets>=5.1.0",
     "jax",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.4",
     "requests>=2.34.2",
-    "torch",
-    "torchvision",
-    "transformers[torch]>=5.20.2",
 ]
 
 [project.optional-dependencies]
 
-cpu=[
+test=["pytest>=9.1.1"]
+
+torch-ext=[
+  "transformers[torch]>=5.20.2",
+  "accelerate>=1.15.0",
+  "datasets>=5.1.0",
+]
+
+torch-cpu=[
     "jax>=0.11.2",
     "torch>=2.14.0",
     "torchvision>=0.29.0",
     "transformers>=5.20.2",
 ]
 
-cuda12 = [
+torch-cuda12 = [
     "jax[cuda12]>=0.11.2",
     "torch>=2.11.0",
     "torchvision>=0.26.0",
     "transformers>=5.20.2",
 ]
 
-cuda13 = [
+torch-cuda13 = [
     "jax[cuda13]>=0.11.2",
     "torch>=2.14.0",
     "torchvision>=0.29.0",
@@ -42,9 +45,9 @@ cuda13 = [
 [tool.uv]
 conflicts = [
   [
-    { extra = "cpu" },
-    { extra = "cuda12" },
-    { extra = "cuda13" },
+    { extra = "torch-cpu" },
+    { extra = "torch-cuda12" },
+    { extra = "torch-cuda13" },
   ],
 ]
 
@@ -66,12 +69,12 @@ explicit = true
 
 [tool.uv.sources]
 torch = [
-  { index = "torch-cpu", extra = "cpu" },
-  { index = "torch-cuda12", extra = "cuda12" },
-  { index = "torch-cuda13", extra = "cuda13" },
+  { index = "torch-cpu", extra = "torch-cpu" },
+  { index = "torch-cuda12", extra = "torch-cuda12" },
+  { index = "torch-cuda13", extra = "torch-cuda13" },
 ]
 torchvision = [
-  { index = "torch-cpu", extra = "cpu" },
-  { index = "torch-cuda12", marker = "sys_platform == 'linux'", extra = "cuda12" },
-  { index = "torch-cuda13", marker = "sys_platform == 'linux'", extra = "cuda13" },
+  { index = "torch-cpu", extra = "torch-cpu" },
+  { index = "torch-cuda12", marker = "sys_platform == 'linux'", extra = "torch-cuda12" },
+  { index = "torch-cuda13", marker = "sys_platform == 'linux'", extra = "torch-cuda13" },
 ]
