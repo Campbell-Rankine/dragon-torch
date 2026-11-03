@@ -1,4 +1,4 @@
-from typing import TypeVar, Union, Literal, ClassVar, Generic, Any, Callable
+from typing import TypeVar, Union, Literal, ClassVar, Generic, Any, Callable, Self
 from pydantic import BaseModel
 import os
 from abc import ABC, abstractmethod
@@ -60,6 +60,9 @@ class DragonDataset(_Dataset[SourceType, ItemDtype], Generic[SourceType, ItemDty
 
     def get_dataset(self) -> ItemDtype:
         return self.data if not self.data is None else self.source.read()
+
+    def to_aggregator(self) -> Self:
+        setattr(self, 'batch_size', None)
 
     def __len__(self) -> int:
         if self.batch_size is None:
