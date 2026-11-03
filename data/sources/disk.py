@@ -1,12 +1,13 @@
-import pandas as pd
-from numpy import ndarray
+
+from functools import partial
 from common.types import PathLike, Path
+from typing import ClassVar
 from .base import Source, SourceConfig, SourceKind, source_factory, OutputType
 
 
 class FileSourceConfig(SourceConfig):
-    single_file = True
-    kind = 'file'
+    single_file: bool = True
+    kind: str = 'file'
 
 
 class FileSource(Source):
@@ -15,9 +16,23 @@ class FileSource(Source):
     def __init__(self, cfg: FileSourceConfig):
         self.cfg = cfg
         self.__length: int = None
+        self.__shape: tuple[int, int] = None
 
-    def read(self) -> OutputType:
-        return self.cfg.dtype(self.cfg.load_fn(self.cfg.loc))
+    def set_read_option(self, key, value):
+        setattr(self, 'read', partial(self.read, **{key: value}))
+
+    def read(self, **kw) -> OutputType:
+        return self.cfg.dtype(self.cfg.load_fn(self.cfg.loc, **kw))
+
+    def shape(self) -> tuple[int]:
+        if self.__shape is not None:
+            return self.__shape
+        __data = self.read()
+        self.__length = len(__data) if hasattr(
+            __data, '__len__') else __data.shape[0]
+        self.__shape = getattr(__data, 'shape', None)
+        del __data
+        return self.__shape
 
     def __len__(self) -> int:
         if self.__length is not None:
@@ -25,18 +40,21 @@ class FileSource(Source):
         __data = self.read()
         self.__length = len(__data) if hasattr(
             __data, '__len__') else __data.shape[0]
+        self.__shape = getattr(__data, 'shape', None)
         del __data
         return self.__length
 
 
-class DiskSourceConfig(SourceConfig):
-    single_file = False
-    kind = 'directory'
-    batch_size = None
+class DirectorySourceConfig(SourceConfig):
+    single_file: bool = False
+    kind: str = 'directory'
+    batch_size: int = None
 
 
-class DiskSource(Source):
-    def __init__(self, cfg: DiskSourceConfig, batched: bool = False):
+class DirectorySource(Source):
+    kind: ClassVar[str] = 'directory'
+
+    def __init__(self, cfg: DirectorySourceConfig, batched: bool = False):
         self.cfg = cfg
         self.batched = batched
 

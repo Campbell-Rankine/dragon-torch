@@ -45,7 +45,6 @@ class Source(ABC, Generic[OutputType]):
 class SourceConfig(BaseModel):
     loc: PathLike
     load_fn: Callable
-    ext: str
     dtype: type = dict[str, Any]
     single_file: bool = False
     read_bytes: bool = False
