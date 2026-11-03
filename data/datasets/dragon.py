@@ -45,10 +45,12 @@ class _Dataset(Dataset, ABC, Generic[SourceType, ItemDtype]):
 
 
 class DragonDataset(_Dataset[SourceType, ItemDtype], Generic[SourceType, ItemDtype]):
-    def __init__(self, source_kind: SourceKind, source_cfg: SourceConfig):
+    def __init__(self, source_kind: SourceKind, source_cfg: SourceConfig, batch_size: int = None):
         self.source = source_factory(source_cfg, kind=source_kind)
         self.kind = source_kind
         self.config = source_cfg
+        self.batch_size = batch_size if batch_size is not None else getattr(
+            source_cfg, 'batch_size', None)
 
     def post_process(self, x):
         return x if not hasattr(self.config, 'post_process') else self.config.post_process(x)
@@ -60,8 +62,9 @@ class DragonDataset(_Dataset[SourceType, ItemDtype], Generic[SourceType, ItemDty
         return self.data if not self.data is None else self.source.read()
 
     def __len__(self) -> int:
-        import numpy as np
-        return np.floor(len(self.source)/self.config.batcher_config.batch_size).item()
+        if self.batch_size is None:
+            return len(self.source)
+        return len(self.source) // self.batch_size
 
     def __getitem__(self, identifier: Union[str, int]) -> ItemDtype:
-        return self.post_process(self.self.get_dataset().__getitem__(identifier))
+        return self.post_process(self.get_dataset().__getitem__(identifier))

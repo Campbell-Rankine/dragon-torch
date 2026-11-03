@@ -14,7 +14,7 @@ type PathLike = Union[Path, str]
 type BackendTypes = Union[Literal['jax'],
                           Literal['numpy'], Literal['pandas'], Literal['torch']]
 type DatasetSplitType = Union[Literal['train'],
-                              Literal['test'], Literal['validation']]
+                              Literal['test'], Literal['valid']]
 
 
 # ------- Torch Types ------- #

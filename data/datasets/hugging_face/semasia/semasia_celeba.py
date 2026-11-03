@@ -19,7 +19,7 @@ class SemasiaCelebaSourceConfig(SemasiaSourceConfig):
 
 
 class SemasiaCeleba(DragonDataset[HuggingFaceSource, SemasiaItemDtype]):
-    kind = 'hf-semasia-cleba'
+    kind = 'hf-semasia-celeba'
 
     def __init__(self, cfg: SemasiaSourceConfig):
         super().__init__(source_kind=self.kind, source_cfg=cfg)

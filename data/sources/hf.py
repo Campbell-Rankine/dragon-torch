@@ -82,6 +82,20 @@ def load_hf_dataset(cfg: Union[HFSourceConfig, HFPolarsSourceConfig]):
     return load_dataset(cfg.repository, *cfg.options, split=cfg.split, cache_dir=cfg.download_path, keep_in_memory=cfg.keep_dataset_in_memory, streaming=cfg.stream_from_hf)
 
 
+def query_hf_split_length(cfg: Union[HFSourceConfig, HFPolarsSourceConfig]) -> int:
+    import requests
+    url = f"https://datasets-server.huggingface.co/size?dataset={cfg.repository}"
+    response = requests.get(url).json() if cfg.bearer is None else requests.get(
+        url, headers={'Authorization': cfg.bearer}).json()
+    # splits is a flat list across every config, so match on both
+    config = cfg.options[0] if len(cfg.options) > 0 else 'default'
+    for split in response['size']['splits']:
+        if split['config'] == config and split['split'] == cfg.split:
+            return split['num_rows']
+    raise KeyError(
+        f"No split={cfg.split} for config={config} in {cfg.repository}")
+
+
 class HuggingFaceSource(Source[Dataset]):
     kind: str = "hugging-face"
 
@@ -89,11 +103,7 @@ class HuggingFaceSource(Source[Dataset]):
         self.cfg = cfg
 
     def _query_hf_dataset_length(self) -> int:
-        import requests
-        url = f"https://datasets-server.huggingface.co/size?dataset={self.cfg.name}"
-        response = requests.get(url).json() if self.cfg.bearer is None else requests.get(
-            url, headers={'Authorization': self.cfg.bearer}).json()
-        return response['size']['splits'][self.cfg.split]['num_rows']
+        return query_hf_split_length(self.cfg)
 
     def __len__(self):
         return self._query_hf_dataset_length()
@@ -110,11 +120,7 @@ class HuggingFacePolarsSource(Source[Dataset]):
         self.cfg = cfg
 
     def _query_hf_dataset_length(self) -> int:
-        import requests
-        url = f"https://datasets-server.huggingface.co/size?dataset={self.cfg.name}"
-        response = requests.get(url).json() if self.cfg.bearer is None else requests.get(
-            url, headers={'Authorization': self.cfg.bearer}).json()
-        return response['size']['splits'][self.cfg.split]['num_rows']
+        return query_hf_split_length(self.cfg)
 
     def __len__(self):
         return self._query_hf_dataset_length()
