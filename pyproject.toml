@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "jax",
+    "optuna>=5.0.0",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.4",
     "requests>=2.34.2",
@@ -21,6 +22,11 @@ packages = ["."]
 [project.optional-dependencies]
 
 test=["pytest>=9.1.1"]
+
+RL=[
+  "stable-retro[extra]",
+  "stable-baselines3[extra]",
+]
 
 torch-ext=[
   "transformers[torch]>=5.20.2",
@@ -84,4 +90,7 @@ torchvision = [
   { index = "torch-cpu", extra = "torch-cpu" },
   { index = "torch-cuda12", marker = "sys_platform == 'linux'", extra = "torch-cuda12" },
   { index = "torch-cuda13", marker = "sys_platform == 'linux'", extra = "torch-cuda13" },
+]
+mariokart-rl = [
+  { git = "https://github.com/jackwboynton/mariokart-rl.git" }
 ]
