@@ -63,6 +63,7 @@ class DragonDataset(_Dataset[SourceType, ItemDtype], Generic[SourceType, ItemDty
 
     def to_aggregator(self) -> Self:
         setattr(self, 'batch_size', None)
+        return self
 
     def __len__(self) -> int:
         if self.batch_size is None:

@@ -1,55 +1,217 @@
 import torch
-from pydantic import BaseModel
-from typing import Generic, TypeVar, Callable, ClassVar, Any, Union
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Generic, Callable, ClassVar, Any, Iterable, Iterator, Optional, Union
 from abc import abstractmethod, ABC
-from common.types import PathLike, Path
+from torch.utils.data import DataLoader, IterableDataset
+from common.types import PathLike
+from common.utils import build_path
 from modules import DragonModule, ModelDtype
 from loss import DragonLossFunction
 
+type Batch = Any
+type DataLike = Iterable[Batch]
 
-class _DragonModel(ABC):
+
+class _DragonModel(ABC, Generic[ModelDtype]):
     kind: ClassVar[str]
     _registry: ClassVar[dict[str, type["_DragonModel"]]] = {}
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)
-        if hasattr(cls, "kind"):
-            _DragonModel._registry[cls.kind] = cls
-        else:
-            _DragonModel._registry[cls.__name__] = cls
+        # only register a kind the subclass declares itself; an inherited kind
+        # would overwrite the parent's registry entry
+        _DragonModel._registry[cls.__dict__.get('kind', cls.__name__)] = cls
 
     @abstractmethod
     def forward(self, X: torch.Tensor, **kwargs) -> ModelDtype: ...
 
     @abstractmethod
-    def loss(self, Y_hat: torch.Tensor, Y: torch.Tensor = None,
-             **kwargs) -> ModelDtype: ...
+    def loss(self, Y_hat: torch.Tensor, Y: Optional[torch.Tensor] = None,
+             **kwargs) -> torch.Tensor: ...
 
-    def penalize(self, loss: torch.Tensor, penalty_fn: Callable, *args, **kwargs) -> ModelDtype:
+    def __call__(self, X: torch.Tensor, **kwargs) -> ModelDtype:
+        return self.forward(X, **kwargs)
+
+    def penalize(self, loss: torch.Tensor, penalty_fn: Callable, *args, **kwargs) -> torch.Tensor:
         result = penalty_fn(loss, *args, **kwargs)
-        if not isinstance(result, ModelDtype):
+        if not isinstance(result, torch.Tensor):
             raise ValueError(
-                f"Expected penalty result to be type={ModelDtype}, found: {type(result)}")
+                f"Expected penalty result to be type={torch.Tensor}, found: {type(result)}")
         return result
 
 
 class DragonModelConfig(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     checkpoint_dir: PathLike
-    save_every: int
-    max_epochs: int
+    save_every: int = Field(ge=1)
+    max_epochs: int = Field(ge=1)
     kind: str = 'torch-model'
+    device: str = 'cpu'
+    # keys used to pull (X, Y) out of dict batches, e.g. semasia's 'embeddings'/'labels'
+    input_key: str = 'X'
+    target_key: Optional[str] = 'Y'
+
+
+def model_factory(module: DragonModule, loss_fn: Callable, cfg: DragonModelConfig, **kw) -> "DragonModel":
+    return _DragonModel._registry[cfg.kind](module=module, loss_fn=loss_fn, cfg=cfg, **kw)
 
 
 class DragonModel(_DragonModel[ModelDtype]):
+    """Wraps a DragonModule + loss and trains it on DragonDatasets.
+
+    Every item a dataset yields is treated as one batch and split into (X, Y) by
+    `unpack_batch`: dicts via cfg.input_key / cfg.target_key, (X, Y) tuples, or a
+    bare X. Override `unpack_batch` for other layouts.
+    """
     kind = 'torch-model'
 
-    def __init__(self, module: DragonModule, loss_fn: DragonLossFunction, cfg: DragonModelConfig):
-        self.torch_module = module
-        self.loss_fn = loss_fn
+    def __init__(self, module: DragonModule, loss_fn: Callable, cfg: DragonModelConfig):
+        if not isinstance(module, torch.nn.Module):
+            raise TypeError(
+                f"module must be a torch.nn.Module (DragonModule), got {type(module)}")
         self.config = cfg
+        self.device = torch.device(cfg.device)
+        self.torch_module = module.to(self.device)
+        self.loss_fn = loss_fn if isinstance(
+            loss_fn, DragonLossFunction) else DragonLossFunction(loss_fn)
+        self.epoch = 0
 
+    # ------- torch.nn.Module passthroughs ------- #
+    def parameters(self, recurse: bool = True) -> Iterator[torch.nn.Parameter]:
+        return self.torch_module.parameters(recurse=recurse)
+
+    def train(self, mode: bool = True) -> "DragonModel":
+        self.torch_module.train(mode)
+        return self
+
+    def eval(self) -> "DragonModel":
+        return self.train(False)
+
+    def to(self, device: Union[str, torch.device]) -> "DragonModel":
+        self.device = torch.device(device)
+        self.torch_module.to(self.device)
+        return self
+
+    # ------- forward / loss ------- #
     def forward(self, X: torch.Tensor, **kw) -> ModelDtype:
-        return self.torch_module.forward(X, **kw)
+        # call the module (not .forward) so torch hooks run
+        return self.torch_module(X, **kw)
 
-    def loss(self, Y_hat: torch.Tensor, Y: torch.Tensor = None, **kwargs):
+    def loss(self, Y_hat: torch.Tensor, Y: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         return self.loss_fn(Y_hat, Y, **kwargs)
+
+    # ------- data ------- #
+    def _to_device(self, x: Any) -> Any:
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x)
+        if isinstance(x, torch.Tensor):
+            return x.to(self.device)
+        if isinstance(x, dict):
+            return {k: self._to_device(v) for k, v in x.items()}
+        return x
+
+    def unpack_batch(self, batch: Batch) -> tuple[Any, Optional[torch.Tensor]]:
+        if isinstance(batch, dict):
+            if self.config.input_key not in batch:
+                raise KeyError(
+                    f"Batch has no input_key='{self.config.input_key}', keys: {list(batch)}")
+            X = batch[self.config.input_key]
+            Y = batch.get(self.config.target_key) if self.config.target_key else None
+        elif isinstance(batch, (tuple, list)):
+            if len(batch) == 2:
+                X, Y = batch
+            elif len(batch) == 1:
+                X, Y = batch[0], None
+            else:
+                raise ValueError(
+                    f"Expected (X,) or (X, Y) batch, got sequence of length {len(batch)}")
+        else:
+            X, Y = batch, None
+        return self._to_device(X), self._to_device(Y)
+
+    @staticmethod
+    def iter_batches(data: DataLike) -> Iterator[Batch]:
+        # DragonDataset inherits HF Dataset.__iter__, which breaks without HF
+        # internals, so index map-style datasets rather than iterating them
+        if isinstance(data, (DataLoader, IterableDataset)):
+            yield from data
+        elif hasattr(data, '__getitem__') and hasattr(data, '__len__'):
+            for i in range(len(data)):
+                yield data[i]
+        else:
+            yield from data
+
+    # ------- training ------- #
+    def _batch_loss(self, batch: Batch) -> torch.Tensor:
+        X, Y = self.unpack_batch(batch)
+        loss = self.loss(self.forward(X), Y)
+        if not isinstance(loss, torch.Tensor) or loss.dim() != 0:
+            raise ValueError(
+                f"Loss must be a scalar tensor, got {type(loss)} with shape {getattr(loss, 'shape', None)}")
+        return loss
+
+    def training_step(self, batch: Batch, optimizer: torch.optim.Optimizer) -> float:
+        self.train()
+        optimizer.zero_grad()
+        loss = self._batch_loss(batch)
+        loss.backward()
+        optimizer.step()
+        return loss.item()
+
+    @torch.no_grad()
+    def evaluate(self, data: DataLike) -> float:
+        """Mean per-batch loss over data."""
+        self.eval()
+        losses = [self._batch_loss(batch).item()
+                  for batch in self.iter_batches(data)]
+        if not losses:
+            raise ValueError("evaluate() got no batches")
+        return float(np.mean(losses))
+
+    def fit(self, train_data: DataLike, optimizer: torch.optim.Optimizer,
+            val_data: Optional[DataLike] = None, epochs: Optional[int] = None) -> list[dict[str, float]]:
+        """Train for `epochs` (default cfg.max_epochs) more epochs, checkpointing
+        every cfg.save_every epochs and after the last one. Returns per-epoch history."""
+        epochs = self.config.max_epochs if epochs is None else epochs
+        history = []
+        for _ in range(epochs):
+            if hasattr(train_data, 'set_epoch'):  # e.g. Aggregator reshuffle
+                train_data.set_epoch(self.epoch)
+            losses = [self.training_step(batch, optimizer)
+                      for batch in self.iter_batches(train_data)]
+            if not losses:
+                raise ValueError("fit() got no training batches")
+            self.epoch += 1
+            record = {'epoch': self.epoch, 'train_loss': float(np.mean(losses))}
+            if val_data is not None:
+                record['val_loss'] = self.evaluate(val_data)
+            history.append(record)
+            if self.epoch % self.config.save_every == 0 or len(history) == epochs:
+                self.save_checkpoint(optimizer)
+        return history
+
+    # ------- checkpoints ------- #
+    def checkpoint_path(self, epoch: Optional[int] = None):
+        epoch = self.epoch if epoch is None else epoch
+        return build_path(self.config.checkpoint_dir) / f"{self.config.kind}-epoch-{epoch}.pt"
+
+    def save_checkpoint(self, optimizer: Optional[torch.optim.Optimizer] = None):
+        path = self.checkpoint_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            'epoch': self.epoch,
+            'kind': self.config.kind,
+            'module_state': self.torch_module.state_dict(),
+            'optimizer_state': None if optimizer is None else optimizer.state_dict(),
+        }, path)
+        return path
+
+    def load_checkpoint(self, path: PathLike, optimizer: Optional[torch.optim.Optimizer] = None) -> int:
+        state = torch.load(build_path(path), map_location=self.device)
+        self.torch_module.load_state_dict(state['module_state'])
+        if optimizer is not None and state['optimizer_state'] is not None:
+            optimizer.load_state_dict(state['optimizer_state'])
+        self.epoch = state['epoch']
+        return self.epoch
