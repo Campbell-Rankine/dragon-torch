@@ -23,6 +23,8 @@ class _DragonModel(ABC, Generic[ModelDtype]):
     # direction of `evaluate`: False for a loss, True for e.g. an episode return.
     # Lets tuners / early stopping compare models without knowing what they are.
     higher_is_better: ClassVar[bool] = False
+    # history key fit() stores evaluate(val_data) under
+    eval_metric: ClassVar[str] = 'val_loss'
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)
@@ -132,6 +134,9 @@ class DragonModel(_DragonModel[ModelDtype]):
                               its own rollouts
       metrics() -> dict       merged into each epoch's history record (keys the
                               model already wrote, like 'train_loss', win)
+
+    Subclasses can likewise return per-epoch values from `epoch_metrics()`
+    (e.g. loss components accumulated in `step`); they win over source metrics.
       state_dict() / load_state_dict(state)
                               the training source's state is saved in checkpoints
                               (e.g. normalisation stats, RNG) and restored on load,
@@ -275,7 +280,9 @@ class DragonModel(_DragonModel[ModelDtype]):
             self.epoch += 1
             record = {'epoch': self.epoch, 'train_loss': float(np.mean(losses))}
             if val_data is not None:
-                record['val_loss'] = self.evaluate(val_data)
+                record[self.eval_metric] = self.evaluate(val_data)
+            record.update({k: v for k, v in self.epoch_metrics().items()
+                           if k not in record})
             if hasattr(train_data, 'metrics'):
                 record.update({k: v for k, v in train_data.metrics().items()
                                if k not in record})
@@ -283,6 +290,10 @@ class DragonModel(_DragonModel[ModelDtype]):
             if self.epoch % self.config.save_every == 0 or len(history) == epochs:
                 self.save_checkpoint(optimizer)
         return history
+
+    def epoch_metrics(self) -> dict[str, float]:
+        """Extra values for the epoch that just finished; called once per epoch."""
+        return {}
 
     # ------- checkpoints ------- #
     def checkpoint_path(self, epoch: Optional[int] = None) -> Path:

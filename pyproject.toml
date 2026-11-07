@@ -26,6 +26,7 @@ test=["pytest>=9.1.1"]
 RL=[
   "stable-retro[extra]",
   "stable-baselines3[extra]",
+  "gymnasium>=1.1",
 ]
 
 torch-ext=[
