@@ -330,3 +330,94 @@ class TestInterface:
 
     def test_dragon_model_implements_interface(self):
         assert not DragonModel.__abstractmethods__
+
+
+class HookSource:
+    """Iterable source implementing every optional data hook."""
+
+    def __init__(self, batches):
+        self.batches = batches
+        self.bound_to = None
+        self.epochs_seen = []
+        self.served = 0
+
+    def bind(self, model):
+        self.bound_to = model
+
+    def set_epoch(self, epoch):
+        self.epochs_seen.append(epoch)
+
+    def __iter__(self):
+        for b in self.batches:
+            self.served += 1
+            yield b
+
+    def metrics(self):
+        return {'served': self.served, 'train_loss': -1.0}
+
+    def state_dict(self):
+        return {'served': self.served, 'rng': np.random.default_rng(0).bit_generator.state}
+
+    def load_state_dict(self, state):
+        self.served = state['served']
+
+
+class TestDataHooks:
+    def test_fit_binds_train_source(self, model, optimizer):
+        source = HookSource(make_batches())
+        model.fit(source, optimizer, epochs=1)
+        assert source.bound_to is model and model.train_source is source
+
+    def test_evaluate_binds_without_becoming_train_source(self, model):
+        source = HookSource(make_batches())
+        model.evaluate(source)
+        assert source.bound_to is model and model.train_source is None
+
+    def test_plain_data_still_works(self, model, dataset, optimizer):
+        assert len(model.fit(dataset, optimizer, epochs=1)) == 1
+        assert model.extra_state() == {}
+
+    def test_metrics_merged_without_overwriting(self, model, optimizer):
+        history = model.fit(HookSource(make_batches()), optimizer, epochs=2)
+        assert [h['served'] for h in history] == [N_BATCHES, 2 * N_BATCHES]
+        assert all(h['train_loss'] > 0 for h in history)
+
+    def test_source_state_round_trips(self, model, optimizer, cfg):
+        model.fit(HookSource(make_batches()), optimizer, epochs=1)
+        fresh = DragonModel(Linear(), torch.nn.MSELoss(), cfg)
+        source = HookSource(make_batches())
+        fresh.bind(source, train=True)
+        fresh.load_checkpoint(model.checkpoint_path())
+        assert source.served == N_BATCHES
+
+    def test_source_state_applied_on_later_bind(self, model, optimizer, cfg):
+        model.fit(HookSource(make_batches()), optimizer, epochs=1)
+        fresh = DragonModel(Linear(), torch.nn.MSELoss(), cfg)
+        fresh.load_checkpoint(model.checkpoint_path())  # no source bound yet
+        source = HookSource(make_batches())
+        fresh.fit(source, torch.optim.SGD(fresh.parameters(), lr=0.1), epochs=1)
+        assert source.served == 2 * N_BATCHES
+
+    def test_extra_state_overridable(self, cfg):
+        class StepCounting(DragonModel):
+            kind = 'test-step-counting'
+
+            def __init__(self, *a):
+                super().__init__(*a)
+                self.global_step = 7
+
+            def extra_state(self):
+                return {**super().extra_state(), 'global_step': self.global_step}
+
+            def load_extra_state(self, state):
+                super().load_extra_state(state)
+                self.global_step = state['global_step']
+
+        path = StepCounting(Linear(), torch.nn.MSELoss(), cfg).save_checkpoint()
+        fresh = StepCounting(Linear(), torch.nn.MSELoss(), cfg)
+        fresh.global_step = 0
+        fresh.load_checkpoint(path)
+        assert fresh.global_step == 7
+
+    def test_higher_is_better_default(self, model):
+        assert model.higher_is_better is False
