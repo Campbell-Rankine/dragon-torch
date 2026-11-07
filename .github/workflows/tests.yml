@@ -2,10 +2,10 @@ name: Tests
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, main]
   workflow_dispatch:
 
-# a newer push to dev supersedes an in-flight run, so main never gets a stale merge
+# a newer push supersedes an in-flight run on the same branch, so main never gets a stale merge
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
@@ -14,6 +14,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write # publish the test-count badge to the `badges` branch
     steps:
       - uses: actions/checkout@v4
 
@@ -33,13 +35,62 @@ jobs:
           key: hf-${{ runner.os }}-${{ hashFiles('tests/conftest.py') }}
 
       - name: Run tests
-        run: uv run pytest -v
+        run: uv run pytest -v --junitxml=report.xml
+
+      # the README badge tracks main only, and is updated whether the tests passed or failed
+      - name: Build test-count badge
+        if: always() && github.ref == 'refs/heads/main'
+        run: |
+          python3 - <<'PY'
+          import json, os
+          import xml.etree.ElementTree as ET
+
+          if os.path.exists('report.xml'):
+              root = ET.parse('report.xml').getroot()
+              suites = [root] if root.tag == 'testsuite' else root.findall('testsuite')
+              count = lambda key: sum(int(s.get(key, 0)) for s in suites)
+              total, skipped = count('tests'), count('skipped')
+              failed = count('failures') + count('errors')
+              passed = total - skipped - failed
+              ran = total - skipped
+              message = f'{passed} passed' if failed == 0 else f'{passed}/{ran} passed'
+              color = 'brightgreen' if failed == 0 else 'red'
+          else:  # pytest never ran (e.g. dependency install failed)
+              message, color = 'error', 'lightgrey'
+
+          with open('tests.json', 'w') as f:
+              json.dump({'schemaVersion': 1, 'label': 'tests on main',
+                         'message': message, 'color': color}, f)
+          print(message)
+          PY
+
+      - name: Publish test-count badge
+        if: always() && github.ref == 'refs/heads/main' && hashFiles('tests.json') != ''
+        run: |
+          cp tests.json "$RUNNER_TEMP/tests.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin badges || true
+          if git rev-parse --verify -q origin/badges; then
+            git switch -f -C badges origin/badges
+          else
+            git switch -f --orphan badges
+            git rm -rfq --cached . || true
+          fi
+          git clean -fdxq
+          cp "$RUNNER_TEMP/tests.json" tests.json
+          git add tests.json
+          git diff --cached --quiet || git commit -m "badge: $(jq -r .message tests.json) @ ${GITHUB_SHA::7}"
+          git push origin badges
 
   merge-to-main:
     needs: test
+    # only commits pushed to dev are merged; pushes to main just run the tests
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # push to main
+      actions: write # trigger the main test run
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,9 +98,25 @@ jobs:
           fetch-depth: 0
 
       - name: Merge dev into main
+        id: merge
         run: |
+          # skip commits main already has (e.g. dev was fast-forwarded to main)
+          if git merge-base --is-ancestor "$GITHUB_SHA" HEAD; then
+            echo "Commit ${GITHUB_SHA::7} is already on main, nothing to merge"
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # merge the exact commit that was tested, not whatever dev points at now
           git merge --ff-only "$GITHUB_SHA" || git merge --no-edit "$GITHUB_SHA"
           git push origin main
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      # pushes made with GITHUB_TOKEN don't trigger workflows, so start the
+      # main run (which refreshes the badge) explicitly
+      - name: Run tests on main
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run tests.yml --ref main --repo "$GITHUB_REPOSITORY"

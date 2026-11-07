@@ -1,6 +1,6 @@
 # dragon-torch
 
-[![Tests](https://github.com/Campbell-Rankine/dragon-torch/actions/workflows/tests.yml/badge.svg?branch=dev)](https://github.com/Campbell-Rankine/dragon-torch/actions/workflows/tests.yml)
+[![Tests on main](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FCampbell-Rankine%2Fdragon-torch%2Fbadges%2Ftests.json)](https://github.com/Campbell-Rankine/dragon-torch/actions/workflows/tests.yml)
 
 PyTorch Deep Learning Dev Modules
 
@@ -20,7 +20,7 @@ take a source as input. Dataset.__getitem__() returns an iterable of batches fro
 
 ### Tests:
 
-Pushes to `dev` run the full test suite in GitHub Actions; when every test passes, `dev` is merged into `main` automatically. Run them locally with:
+Pushes to `dev` run the full test suite in GitHub Actions; when every test passes, `dev` is merged into `main` automatically. Pushes to `main` run the tests without merging anything. The badge above shows how many tests pass on `main`, and is refreshed after every `main` run. Run them locally with:
 
 ```bash
 uv run --extra test --extra torch-cpu --extra torch-ext pytest            # everything
