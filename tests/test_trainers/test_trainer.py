@@ -88,3 +88,27 @@ class TestDragonTrainer:
         trainer = DragonTrainer(make_model(cfg), sgd, DragonTrainerConfig(resume=True))
         assert trainer.resume() is None
         assert trainer.fit(batches(), epochs=1)[0]['epoch'] == 1
+
+    def test_higher_is_better_passthrough(self, cfg):
+        assert DragonTrainer(make_model(cfg), sgd).higher_is_better is False
+
+    def test_resume_restores_source_state_before_fit(self, cfg):
+        class CountingSource:
+            def __init__(self):
+                self.served = 0
+
+            def __iter__(self):
+                for b in batches():
+                    self.served += 1
+                    yield b
+
+            def state_dict(self):
+                return {'served': self.served}
+
+            def load_state_dict(self, state):
+                self.served = state['served']
+
+        DragonTrainer(make_model(cfg), sgd).fit(CountingSource(), epochs=2)
+        source = CountingSource()
+        DragonTrainer(make_model(cfg), sgd, DragonTrainerConfig(resume=True)).fit(source, epochs=1)
+        assert source.served == 18  # 12 restored + 6 from the resumed epoch

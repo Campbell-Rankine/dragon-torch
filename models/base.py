@@ -20,6 +20,9 @@ class _DragonModel(ABC, Generic[ModelDtype]):
     whose `fit` collects rollouts and whose `evaluate` returns episode return."""
     kind: ClassVar[str]
     _registry: ClassVar[dict[str, type["_DragonModel"]]] = {}
+    # direction of `evaluate`: False for a loss, True for e.g. an episode return.
+    # Lets tuners / early stopping compare models without knowing what they are.
+    higher_is_better: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)
@@ -121,6 +124,18 @@ class DragonModel(_DragonModel[ModelDtype]):
     Every item a dataset yields is treated as one batch and split into (X, Y) by
     `unpack_batch`: dicts via cfg.input_key / cfg.target_key, (X, Y) tuples, or a
     bare X. Override `unpack_batch` for other layouts.
+
+    Data sources can opt into these duck-typed hooks (all optional):
+      set_epoch(epoch)        called before each training epoch (e.g. reshuffle)
+      bind(model)             called once by fit / evaluate, before iterating, so
+                              a source can use the model, e.g. a policy collecting
+                              its own rollouts
+      metrics() -> dict       merged into each epoch's history record (keys the
+                              model already wrote, like 'train_loss', win)
+      state_dict() / load_state_dict(state)
+                              the training source's state is saved in checkpoints
+                              (e.g. normalisation stats, RNG) and restored on load,
+                              or on the next bind if no source is bound yet
     """
     kind = 'torch-model'
 
@@ -134,6 +149,9 @@ class DragonModel(_DragonModel[ModelDtype]):
         self.loss_fn = loss_fn if isinstance(
             loss_fn, DragonLossFunction) else DragonLossFunction(loss_fn)
         self.epoch = 0
+        self.train_source: Optional[DataLike] = None
+        # source state loaded from a checkpoint before any source was bound
+        self._pending_source_state: Optional[dict] = None
 
     # ------- torch.nn.Module passthroughs ------- #
     def parameters(self, recurse: bool = True) -> Iterator[torch.nn.Parameter]:
@@ -200,6 +218,18 @@ class DragonModel(_DragonModel[ModelDtype]):
         else:
             yield from data
 
+    def bind(self, data: DataLike, train: bool = False) -> DataLike:
+        """Let `data` see this model (if it has `bind`). Binding a training source
+        also makes its state part of checkpoints."""
+        if hasattr(data, 'bind'):
+            data.bind(self)
+        if train and data is not self.train_source:
+            self.train_source = data
+            if self._pending_source_state is not None and hasattr(data, 'load_state_dict'):
+                data.load_state_dict(self._pending_source_state)
+                self._pending_source_state = None
+        return data
+
     # ------- training ------- #
     def _batch_loss(self, batch: Batch) -> torch.Tensor:
         X, Y = self.unpack_batch(batch)
@@ -220,6 +250,7 @@ class DragonModel(_DragonModel[ModelDtype]):
     @torch.no_grad()
     def evaluate(self, data: DataLike) -> float:
         """Mean per-batch loss over data."""
+        self.bind(data)
         self.eval()
         losses = [self._batch_loss(batch).item()
                   for batch in self.iter_batches(data)]
@@ -232,6 +263,7 @@ class DragonModel(_DragonModel[ModelDtype]):
         """Train for `epochs` (default cfg.max_epochs) more epochs, checkpointing
         every cfg.save_every epochs and after the last one. Returns per-epoch history."""
         epochs = self.config.max_epochs if epochs is None else epochs
+        self.bind(train_data, train=True)
         history = []
         for _ in range(epochs):
             if hasattr(train_data, 'set_epoch'):  # e.g. Aggregator reshuffle
@@ -244,6 +276,9 @@ class DragonModel(_DragonModel[ModelDtype]):
             record = {'epoch': self.epoch, 'train_loss': float(np.mean(losses))}
             if val_data is not None:
                 record['val_loss'] = self.evaluate(val_data)
+            if hasattr(train_data, 'metrics'):
+                record.update({k: v for k, v in train_data.metrics().items()
+                               if k not in record})
             history.append(record)
             if self.epoch % self.config.save_every == 0 or len(history) == epochs:
                 self.save_checkpoint(optimizer)
@@ -272,13 +307,33 @@ class DragonModel(_DragonModel[ModelDtype]):
             'kind': self.config.kind,
             'module_state': self.torch_module.state_dict(),
             'optimizer_state': None if optimizer is None else optimizer.state_dict(),
+            'extra_state': self.extra_state(),
         }, path)
         return path
 
     def load_checkpoint(self, path: PathLike, optimizer: Optional[torch.optim.Optimizer] = None) -> int:
-        state = torch.load(build_path(path), map_location=self.device)
+        # weights_only=False: extra_state may hold source state (e.g. numpy RNG
+        # / running stats) that the safe unpickler rejects. Only load your own files.
+        state = torch.load(build_path(path), map_location=self.device, weights_only=False)
         self.torch_module.load_state_dict(state['module_state'])
         if optimizer is not None and state['optimizer_state'] is not None:
             optimizer.load_state_dict(state['optimizer_state'])
         self.epoch = state['epoch']
+        self.load_extra_state(state.get('extra_state') or {})
         return self.epoch
+
+    def extra_state(self) -> dict[str, Any]:
+        """Non-parameter state to checkpoint. Subclasses extend it, e.g.
+        `return {**super().extra_state(), 'global_step': self.global_step}`."""
+        if self.train_source is not None and hasattr(self.train_source, 'state_dict'):
+            return {'train_source': self.train_source.state_dict()}
+        return {}
+
+    def load_extra_state(self, state: dict[str, Any]) -> None:
+        source_state = state.get('train_source')
+        if source_state is None:
+            return
+        if self.train_source is not None and hasattr(self.train_source, 'load_state_dict'):
+            self.train_source.load_state_dict(source_state)
+        else:  # e.g. DragonTrainer.resume() runs before fit() binds the source
+            self._pending_source_state = source_state

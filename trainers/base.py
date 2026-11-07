@@ -37,6 +37,11 @@ class DragonTrainer:
         self.history: list[dict[str, float]] = []
         self._resume_pending = self.config.resume
 
+    @property
+    def higher_is_better(self) -> bool:
+        """Whether a larger `evaluate` score is better (loss: False, return: True)."""
+        return self.model.higher_is_better
+
     def resume(self, path: Optional[PathLike] = None) -> Optional[int]:
         """Load `path` (default: the model's latest checkpoint). Returns the
         restored epoch, or None if there was nothing to resume from."""
