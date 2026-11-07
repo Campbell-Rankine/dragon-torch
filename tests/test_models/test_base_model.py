@@ -221,9 +221,9 @@ class TestWithDragonDataset:
         assert len(batches) == N_BATCHES
         torch.testing.assert_close(batches[0]['X'], make_batches()[0]['X'])
 
-    def test_training_step_updates_params(self, model, dataset, optimizer):
+    def test_step_updates_params(self, model, dataset, optimizer):
         before = [p.clone() for p in model.parameters()]
-        loss = model.training_step(dataset[0], optimizer)
+        loss = model.step(dataset[0], optimizer)
         assert isinstance(loss, float)
         assert any(not torch.equal(a, b) for a, b in zip(before, model.parameters()))
 
@@ -308,3 +308,25 @@ class TestCheckpoints:
         assert path.exists()
         fresh = DragonModel(Linear(), torch.nn.MSELoss(), cfg)
         assert fresh.load_checkpoint(path) == 0
+
+    def test_latest_checkpoint(self, model, dataset, optimizer, cfg):
+        assert model.latest_checkpoint() is None
+        model.fit(dataset, optimizer, epochs=3)  # saves epochs 2 and 3
+        (cfg.checkpoint_dir / 'torch-model-epoch-9-backup.pt').touch()
+        (cfg.checkpoint_dir / 'other-kind-epoch-10.pt').touch()
+        assert model.latest_checkpoint() == model.checkpoint_path(3)
+
+
+class TestInterface:
+    def test_incomplete_subclass_is_abstract(self):
+        class ForwardOnly(_DragonModel):
+            kind = 'test-forward-only'
+
+            def forward(self, X, **kw):
+                return X
+
+        with pytest.raises(TypeError, match='step'):
+            ForwardOnly()
+
+    def test_dragon_model_implements_interface(self):
+        assert not DragonModel.__abstractmethods__

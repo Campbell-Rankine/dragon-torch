@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Generic, Callable, ClassVar, Any, Iterable, Iterator, Optional, Union
 from abc import abstractmethod, ABC
 from torch.utils.data import DataLoader, IterableDataset
+from pathlib import Path
 from common.types import PathLike
 from common.utils import build_path
 from modules import DragonModule, ModelDtype
@@ -14,6 +15,9 @@ type DataLike = Iterable[Batch]
 
 
 class _DragonModel(ABC, Generic[ModelDtype]):
+    """The interface a DragonTrainer drives. Implement every abstract method to
+    make a model trainable, e.g. a supervised DragonModel or an RL policy model
+    whose `fit` collects rollouts and whose `evaluate` returns episode return."""
     kind: ClassVar[str]
     _registry: ClassVar[dict[str, type["_DragonModel"]]] = {}
 
@@ -23,12 +27,64 @@ class _DragonModel(ABC, Generic[ModelDtype]):
         # would overwrite the parent's registry entry
         _DragonModel._registry[cls.__dict__.get('kind', cls.__name__)] = cls
 
+    # ------- torch.nn.Module passthroughs ------- #
+    @abstractmethod
+    def parameters(self, recurse: bool = True) -> Iterator[torch.nn.Parameter]: ...
+
+    @abstractmethod
+    def eval(self) -> "_DragonModel": ...
+
+    @abstractmethod
+    def to(self, device: Union[str, torch.device]) -> "_DragonModel": ...
+
+    # ------- forward / loss ------- #
     @abstractmethod
     def forward(self, X: torch.Tensor, **kwargs) -> ModelDtype: ...
 
     @abstractmethod
     def loss(self, Y_hat: torch.Tensor, Y: Optional[torch.Tensor] = None,
              **kwargs) -> torch.Tensor: ...
+
+    # ------- data ------- #
+    @abstractmethod
+    def _to_device(self, x: Any) -> Any: ...
+
+    @abstractmethod
+    def unpack_batch(self, batch: Batch) -> tuple[Any, Optional[torch.Tensor]]: ...
+
+    @staticmethod
+    @abstractmethod
+    def iter_batches(data: DataLike) -> Iterator[Batch]: ...
+
+    # ------- training ------- #
+    @abstractmethod
+    def _batch_loss(self, batch: Batch) -> torch.Tensor: ...
+
+    @abstractmethod
+    def step(self, batch: Batch, optimizer: torch.optim.Optimizer) -> float:
+        """One optimisation step on one batch; returns the batch loss."""
+
+    @abstractmethod
+    def evaluate(self, data: DataLike) -> float: ...
+
+    @abstractmethod
+    def fit(self, train_data: DataLike, optimizer: torch.optim.Optimizer,
+            val_data: Optional[DataLike] = None,
+            epochs: Optional[int] = None) -> list[dict[str, float]]: ...
+
+    # ------- checkpoints ------- #
+    @abstractmethod
+    def checkpoint_path(self, epoch: Optional[int] = None) -> Path: ...
+
+    @abstractmethod
+    def latest_checkpoint(self) -> Optional[Path]: ...
+
+    @abstractmethod
+    def save_checkpoint(self, optimizer: Optional[torch.optim.Optimizer] = None) -> Path: ...
+
+    @abstractmethod
+    def load_checkpoint(self, path: PathLike,
+                        optimizer: Optional[torch.optim.Optimizer] = None) -> int: ...
 
     def __call__(self, X: torch.Tensor, **kwargs) -> ModelDtype:
         return self.forward(X, **kwargs)
@@ -59,7 +115,8 @@ def model_factory(module: DragonModule, loss_fn: Callable, cfg: DragonModelConfi
 
 
 class DragonModel(_DragonModel[ModelDtype]):
-    """Wraps a DragonModule + loss and trains it on DragonDatasets.
+    """Default supervised implementation: wraps a DragonModule + loss and trains
+    it on DragonDatasets. Pass it to a DragonTrainer, or call `fit` directly.
 
     Every item a dataset yields is treated as one batch and split into (X, Y) by
     `unpack_batch`: dicts via cfg.input_key / cfg.target_key, (X, Y) tuples, or a
@@ -152,7 +209,7 @@ class DragonModel(_DragonModel[ModelDtype]):
                 f"Loss must be a scalar tensor, got {type(loss)} with shape {getattr(loss, 'shape', None)}")
         return loss
 
-    def training_step(self, batch: Batch, optimizer: torch.optim.Optimizer) -> float:
+    def step(self, batch: Batch, optimizer: torch.optim.Optimizer) -> float:
         self.train()
         optimizer.zero_grad()
         loss = self._batch_loss(batch)
@@ -179,7 +236,7 @@ class DragonModel(_DragonModel[ModelDtype]):
         for _ in range(epochs):
             if hasattr(train_data, 'set_epoch'):  # e.g. Aggregator reshuffle
                 train_data.set_epoch(self.epoch)
-            losses = [self.training_step(batch, optimizer)
+            losses = [self.step(batch, optimizer)
                       for batch in self.iter_batches(train_data)]
             if not losses:
                 raise ValueError("fit() got no training batches")
@@ -193,11 +250,21 @@ class DragonModel(_DragonModel[ModelDtype]):
         return history
 
     # ------- checkpoints ------- #
-    def checkpoint_path(self, epoch: Optional[int] = None):
+    def checkpoint_path(self, epoch: Optional[int] = None) -> Path:
         epoch = self.epoch if epoch is None else epoch
         return build_path(self.config.checkpoint_dir) / f"{self.config.kind}-epoch-{epoch}.pt"
 
-    def save_checkpoint(self, optimizer: Optional[torch.optim.Optimizer] = None):
+    def latest_checkpoint(self) -> Optional[Path]:
+        """Highest-epoch checkpoint for this kind in checkpoint_dir, or None."""
+        prefix = f"{self.config.kind}-epoch-"
+        found = {}
+        for path in build_path(self.config.checkpoint_dir).glob(f"{prefix}*.pt"):
+            suffix = path.stem[len(prefix):]
+            if suffix.isdigit():  # skip e.g. 'kind-epoch-1-backup.pt'
+                found[int(suffix)] = path
+        return found[max(found)] if found else None
+
+    def save_checkpoint(self, optimizer: Optional[torch.optim.Optimizer] = None) -> Path:
         path = self.checkpoint_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save({
