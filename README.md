@@ -30,6 +30,13 @@ uv run --extra test --extra torch-cpu --extra torch-ext pytest -m "not network" 
 ### TODO:
 
 - [ ] : Setup Lazy Loading for hugging face sources.
+- [ ] : Set up monitoring / experimentation with optuna
+- [ ] : Implement off policy algorithms / dependencies.
+- [ ] : Test Accelerate.prepare works with loaders
+- [ ] : Test Accelerate.prepare works with gyms
+- [ ] : OUActionNoise for RL 
+- [ ] : Research better state memory solutions
+- [ ] : Trading environment as a test case in self implemented problem
 
 
 ### RL
