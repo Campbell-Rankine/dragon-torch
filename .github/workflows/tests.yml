@@ -1,0 +1,55 @@
+name: Tests
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+# a newer push to dev supersedes an in-flight run, so main never gets a stale merge
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync --extra test --extra torch-cpu --extra torch-ext
+
+      - name: Cache Hugging Face downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ hashFiles('tests/conftest.py') }}
+
+      - name: Run tests
+        run: uv run pytest -v
+
+  merge-to-main:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge dev into main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # merge the exact commit that was tested, not whatever dev points at now
+          git merge --ff-only "$GITHUB_SHA" || git merge --no-edit "$GITHUB_SHA"
+          git push origin main
