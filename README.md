@@ -43,16 +43,4 @@ uv run --extra test --extra torch-cpu --extra torch-ext pytest -m "not network" 
 | Model | `models/RL/base.py` | `DragonRLModel` adds gradient clipping and returns episode return from `evaluate`. Its epoch count comes from `total_timesteps`, minus the steps already taken |
 | SB3 | `modules/external/sb3.py` | `DragonFeaturesExtractor` and `sb3_policy_kwargs` |
 
-`DragonTrainer` drives RL models unchanged. `models/base.py` has two hooks for them: `epoch_metrics()`, so loss components reach the history, and `eval_metric`, so RL records `val_return` instead of `val_loss`.
 
-#### Behaviours worth knowing
-
-- **Truncated episodes bootstrap correctly.**
-  - When an episode ends, the collector puts the true final observation into the transition. The policy still sees the reset observation on its next step.
-  - Truncated episodes bootstrap from the final observation's value; terminated ones don't bootstrap at all.
-  - Tests check both cases against hand-computed advantages.
-- **Normalisation lives in the collector, not in gym wrappers.**
-  - The same statistics also apply to the final observations, which wrappers wouldn't reach.
-  - Evaluation borrows the training statistics read-only.
-  - The statistics are stored as tensors, so this source state would also load under torch's safe loader.
-- **Resuming works.** A test checks that resume restores the normalisation stats and the step budget, then finishes the remaining epochs.
