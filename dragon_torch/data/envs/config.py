@@ -3,6 +3,7 @@ import gymnasium as gym
 from gymnasium.vector import AsyncVectorEnv, AutoresetMode, SyncVectorEnv, VectorEnv
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .registry import WrapperSpec
+from .wrappers import RecordRawReward
 
 type EnvFn = Callable[..., gym.Env]
 type WrapperFn = Callable[[gym.Env], gym.Env]
@@ -39,16 +40,24 @@ class DragonEnvConfig(BaseModel):
         return self
 
     @property
+    def shaped(self) -> bool:
+        """Whether wrappers sit between the env and the agent, so the reward
+        trained on may differ from the env's own (raw) reward."""
+        return bool(self.wrappers)
+
+    @property
     def portable(self) -> bool:
         """True if the config is pure data: rebuildable from its JSON alone."""
         return self.env_fn is None and all(isinstance(w, WrapperSpec) for w in self.wrappers)
 
 
 def make_env_fn(cfg: DragonEnvConfig) -> Callable[[], gym.Env]:
-    """A picklable thunk building one wrapped sub-env."""
+    """A picklable thunk building one wrapped sub-env:
+    base env -> RecordRawReward -> cfg.wrappers (in order)."""
     def _make() -> gym.Env:
         env = gym.make(cfg.env_id, **cfg.env_kwargs) if cfg.env_id is not None \
             else cfg.env_fn(**cfg.env_kwargs)
+        env = RecordRawReward(env)
         for wrapper in cfg.wrappers:
             env = wrapper(env)
         return env

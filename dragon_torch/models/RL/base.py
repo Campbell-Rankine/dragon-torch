@@ -1,6 +1,6 @@
 import math
 from collections import defaultdict
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Literal, Optional, Sequence
 import numpy as np
 import torch
 from pydantic import Field
@@ -20,6 +20,9 @@ class DragonRLConfig(DragonModelConfig):
     # counting steps already taken (so a resumed run finishes the same budget)
     total_timesteps: Optional[int] = Field(default=None, ge=1)
     max_grad_norm: Optional[float] = Field(default=0.5, gt=0)
+    # which return evaluate() scores: the env's own reward ('raw', the task) or
+    # the reward after the env config's wrappers ('shaped', what the agent trains on)
+    eval_return: Literal['raw', 'shaped'] = 'raw'
 
 
 class DragonRLModel(DragonModel[PolicyOutput]):
@@ -39,6 +42,8 @@ class DragonRLModel(DragonModel[PolicyOutput]):
     def __init__(self, module: DragonPolicyModule, loss_fn: Callable, cfg: DragonRLConfig):
         super().__init__(module, loss_fn, cfg)
         self._loss_metrics: dict[str, list[float]] = defaultdict(list)
+        # means of the last evaluate(): {'return', 'shaped_return', 'length'}
+        self.last_eval: dict[str, float] = {}
 
     # ------- data ------- #
     def _to_device(self, x: Any) -> Any:
@@ -87,13 +92,20 @@ class DragonRLModel(DragonModel[PolicyOutput]):
 
     @torch.no_grad()
     def evaluate(self, data: DataLike) -> float:
-        """Mean episode return over data (an EpisodeSource)."""
+        """Mean episode return over data (an EpisodeSource): the raw return by
+        default, the shaped one with cfg.eval_return='shaped'. All the means are
+        kept in `last_eval`."""
         self.bind(data)
         self.eval()
-        returns = [ep['return'] for ep in self.iter_batches(data)]
-        if not returns:
+        episodes = list(self.iter_batches(data))
+        if not episodes:
             raise ValueError("evaluate() got no episodes")
-        return float(np.mean(returns))
+        self.last_eval = {
+            'return': float(np.mean([ep['return'] for ep in episodes])),
+            'shaped_return': float(np.mean([ep.get('shaped_return', ep['return']) for ep in episodes])),
+            'length': float(np.mean([ep['length'] for ep in episodes if 'length' in ep] or [np.nan])),
+        }
+        return self.last_eval['shaped_return' if self.config.eval_return == 'shaped' else 'return']
 
     def fit(self, train_data: DataLike, optimizer: torch.optim.Optimizer,
             val_data: Optional[DataLike] = None, epochs: Optional[int] = None,

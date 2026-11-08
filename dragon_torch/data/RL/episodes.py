@@ -5,7 +5,9 @@ from dragon_torch.data.RL.collector import Actor, EnvCollector
 
 class EpisodeSource:
     """Evaluation source: iterating runs the bound model until n_episodes finish,
-    yielding {'return', 'length'} per episode (raw, unscaled rewards).
+    yielding {'return', 'shaped_return', 'length'} per episode. 'return' is the
+    env's own (raw) reward, before the config's wrappers; 'shaped_return' is
+    after them. Neither is affected by reward normalisation.
 
     Every iteration re-seeds the env with env_cfg.seed, so successive evaluations
     of the same policy are comparable. On bind it borrows the training source's
@@ -37,11 +39,17 @@ class EpisodeSource:
                                    f"{self.max_steps} vector steps; add a TimeLimit wrapper")
             self.collector.step(self.actor, deterministic=self.deterministic)
             steps += 1
-            for ret, length in self.collector.drain_episodes():
-                yield {'return': ret, 'length': length}
+            for ep in self.collector.drain_episodes():
+                yield {'return': ep.raw_return, 'shaped_return': ep.shaped_return,
+                       'length': ep.length}
                 yielded += 1
                 if yielded == self.n_episodes:
                     return
+
+    @property
+    def shaped(self) -> bool:
+        """Whether wrappers may make shaped_return differ from return."""
+        return self.collector.shaped
 
     def close(self) -> None:
         self.collector.close()

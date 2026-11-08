@@ -202,8 +202,18 @@ def test_tune_a_wrapper_setting(tmp_path):
         saved = PPOTrainerConfig.model_validate_json(open(t.user_attrs['config_path']).read())
         assert saved.env.portable
         assert saved.env.wrappers[0].kwargs['scale'] == t.params['env.wrappers.0.kwargs.scale']
-        # CartPole pays 1 per step, so the shaped training return is scale x episode length
+        # CartPole pays 1 per step: the raw return is the episode length, and the
+        # shaped one (what the agent trained on) is scale x length
         history = read_history(f"{t.user_attrs['trial_dir']}/history.jsonl")
-        shaped = [r['episode_return'] / r['episode_length'] for r in history if 'episode_return' in r]
-        assert shaped and all(s == pytest.approx(saved.env.wrappers[0].kwargs['scale']) for s in shaped)
+        episodes = [r for r in history if 'episode_return' in r]
+        scale = saved.env.wrappers[0].kwargs['scale']
+        assert episodes
+        for r in episodes:
+            assert r['episode_return'] == pytest.approx(r['episode_length'])
+            assert r['episode_return_shaped'] == pytest.approx(scale * r['episode_length'])
+        evals = [r for r in history if 'val_return' in r]
+        assert evals and all(r['val_return'] == r['val_return_raw'] for r in evals)
+        assert all(r['val_return_shaped'] == pytest.approx(scale * r['val_return_raw']) for r in evals)
+        # the objective is the raw (task) return, not the shaping
+        assert t.value == evals[-1]['val_return_smooth']
     assert json.loads((cfg.study_dir / 'best.json').read_text())['best']

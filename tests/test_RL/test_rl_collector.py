@@ -4,7 +4,8 @@ import pytest
 import torch
 from gymnasium import spaces
 from dragon_torch.data.envs import DragonEnvConfig
-from dragon_torch.data.RL import ActOutput, EnvCollector, EpisodeSource, RolloutSource, compute_gae
+from dragon_torch.data.RL import (ActOutput, EnvCollector, Episode, EpisodeSource, RolloutSource,
+                                  compute_gae)
 
 
 class CounterEnv(gym.Env):
@@ -53,7 +54,7 @@ class TestEnvCollector:
         assert tr.truncated.tolist() == [True] and tr.terminated.tolist() == [False]
         assert tr.next_obs.tolist() == [[3.0]]   # true successor
         assert col.obs.tolist() == [[0.0]]        # what the policy sees next
-        assert col.drain_episodes() == [(3.0, 3)]
+        assert col.drain_episodes() == [Episode(raw_return=3.0, length=3, shaped_return=3.0)]
         assert col.global_step == 3
 
     def test_metrics(self):
@@ -137,7 +138,7 @@ class TestEpisodeSource:
         src = EpisodeSource(counter_cfg(n_envs=2, truncate_at=3), n_episodes=3)
         src.bind(CountingActor())
         eps = list(src)
-        assert eps == [{'return': 3.0, 'length': 3}] * 3
+        assert eps == [{'return': 3.0, 'shaped_return': 3.0, 'length': 3}] * 3
         assert list(src) == eps  # re-seeded / reset each iteration
 
     def test_never_ending_env_guard(self):

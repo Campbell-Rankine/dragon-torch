@@ -105,7 +105,8 @@ class MyAlgoTrainer(DragonRLTrainer):
 
 | Key | Value |
 |---|---|
-| `val_return` | Mean return over this evaluation's episodes |
+| `val_return` | Mean return over this evaluation's episodes: the env's raw reward by default (`model.eval_return`) |
+| `val_return_raw`, `val_return_shaped` | Both returns, when `env.wrappers` is non-empty (see [envs.md](envs.md#raw-and-shaped-rewards)) |
 | `val_return_smooth` | Mean of the last `smooth_window` evaluations |
 | `eval_step` | The scheduled step: a multiple of `every_steps`, capped at `total_timesteps`. It is the same across runs with different epoch sizes, unlike `global_step` |
 

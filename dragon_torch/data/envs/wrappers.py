@@ -4,6 +4,22 @@ import numpy as np
 from gymnasium import spaces
 from .registry import register_wrapper
 
+RAW_REWARD_KEY = 'raw_reward'
+
+
+class RecordRawReward(gym.Wrapper):
+    """Copies each step's reward into info['raw_reward'] before any outer
+    wrapper changes it. make_env_fn puts it directly around the base env (inside
+    every configured wrapper), so the collector can report the task's own
+    return next to the shaped one the agent trains on. Not registered: the
+    framework adds it itself."""
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        info = dict(info)
+        info[RAW_REWARD_KEY] = float(reward)
+        return obs, reward, terminated, truncated, info
+
 
 @register_wrapper
 class Discretizer(gym.ActionWrapper):

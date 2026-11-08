@@ -8,7 +8,7 @@ on it, so autoreset, normalisation, episode stats and step counting live here on
 """
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, NamedTuple, Optional, Protocol, runtime_checkable
 import numpy as np
 import torch
 from gymnasium import spaces
@@ -16,6 +16,7 @@ from dragon_torch.common.torch.tree import tree_map, tree_set
 from dragon_torch.data.envs.config import DragonEnvConfig, make_vec_env
 from dragon_torch.data.envs.normalize import ObsNormalizer, RewardScaler
 from dragon_torch.data.envs.spaces import action_to_env
+from dragon_torch.data.envs.wrappers import RAW_REWARD_KEY
 
 
 @dataclass
@@ -37,6 +38,15 @@ class ValueActor(Actor, Protocol):
     """Actor with a state-value estimate, needed for GAE bootstrapping."""
 
     def value(self, obs: Any) -> torch.Tensor: ...
+
+
+class Episode(NamedTuple):
+    """A finished episode. `raw_return` is the env's own reward (the task),
+    `shaped_return` the reward after the config's wrappers (what the agent
+    trained on, before reward normalisation). Equal when there are no wrappers."""
+    raw_return: float
+    length: int
+    shaped_return: float
 
 
 @dataclass
@@ -75,9 +85,12 @@ class EnvCollector:
         self.update_stats = update_stats
         self.global_step = 0
         self._obs: Any = None
-        self._ep_return = np.zeros(self.n_envs)
+        # whether wrappers may change the reward, so shaped returns are reported too
+        self.shaped = env_cfg.shaped
+        self._ep_return = np.zeros(self.n_envs)       # shaped (after wrappers)
+        self._ep_raw_return = np.zeros(self.n_envs)   # the env's own reward
         self._ep_length = np.zeros(self.n_envs, np.int64)
-        self._finished: list[tuple[float, int]] = []
+        self._finished: list[Episode] = []
         self._clock = (time.perf_counter(), 0)
 
     # ------- obs ------- #
@@ -93,6 +106,7 @@ class EnvCollector:
         raw, _ = self.env.reset(seed=self.env_cfg.seed if seed is None else seed)
         self._obs = self._observe(raw)
         self._ep_return[:] = 0
+        self._ep_raw_return[:] = 0
         self._ep_length[:] = 0
         return self._obs
 
@@ -104,6 +118,24 @@ class EnvCollector:
         return self._obs
 
     # ------- stepping ------- #
+    @staticmethod
+    def raw_rewards(reward: np.ndarray, info: dict[str, Any], done: np.ndarray) -> np.ndarray:
+        """The env's own per-env rewards from RecordRawReward's info entries.
+        With SAME_STEP autoreset, an env that just finished reports its last
+        step's info under info['final_info']. Falls back to `reward` wherever
+        the entry is missing (e.g. a wrapper that drops info)."""
+        raw = np.array(reward, dtype=np.float64, copy=True)
+        sources = [(info, np.ones_like(done))]
+        final = info.get('final_info')
+        if done.any() and isinstance(final, dict):
+            sources.append((final, done))
+        for source, allowed in sources:
+            values, mask = source.get(RAW_REWARD_KEY), source.get(f'_{RAW_REWARD_KEY}')
+            if values is not None and mask is not None:
+                sel = np.asarray(mask, bool) & allowed
+                raw[sel] = np.asarray(values, np.float64)[sel]
+        return raw
+
     def step(self, actor: Actor, deterministic: bool = False) -> Transition:
         obs = self.obs
         out = actor.act(obs, deterministic=deterministic)
@@ -120,10 +152,13 @@ class EnvCollector:
             next_obs = self._normalize(true_next)
 
         self._ep_return += reward
+        self._ep_raw_return += self.raw_rewards(reward, info, done)
         self._ep_length += 1
         for i in np.flatnonzero(done):
-            self._finished.append((float(self._ep_return[i]), int(self._ep_length[i])))
-            self._ep_return[i], self._ep_length[i] = 0, 0
+            self._finished.append(Episode(raw_return=float(self._ep_raw_return[i]),
+                                          length=int(self._ep_length[i]),
+                                          shaped_return=float(self._ep_return[i])))
+            self._ep_return[i], self._ep_raw_return[i], self._ep_length[i] = 0, 0, 0
 
         train_reward = reward if self.reward_scaler is None else \
             self.reward_scaler(reward, done, update=self.update_stats)
@@ -134,8 +169,8 @@ class EnvCollector:
                           extras=out.extras)
 
     # ------- stats / state ------- #
-    def drain_episodes(self) -> list[tuple[float, int]]:
-        """(raw return, length) of episodes finished since the last drain."""
+    def drain_episodes(self) -> list[Episode]:
+        """Episodes finished since the last drain."""
         finished, self._finished = self._finished, []
         return finished
 
@@ -146,8 +181,12 @@ class EnvCollector:
         record = {'global_step': steps, 'steps_per_sec': (steps - steps_then) / max(now - then, 1e-9)}
         episodes = self.drain_episodes()
         if episodes:
-            record['episode_return'] = float(np.mean([r for r, _ in episodes]))
-            record['episode_length'] = float(np.mean([l for _, l in episodes]))
+            # episode_return is the task's (raw) return; *_shaped is what the
+            # agent trained on, reported only when wrappers can change it
+            record['episode_return'] = float(np.mean([e.raw_return for e in episodes]))
+            if self.shaped:
+                record['episode_return_shaped'] = float(np.mean([e.shaped_return for e in episodes]))
+            record['episode_length'] = float(np.mean([e.length for e in episodes]))
             record['episodes'] = len(episodes)
         return record
 

@@ -4,4 +4,4 @@ from .registry import (WrapperSpec, register_wrapper, registered_wrappers, resol
                        unregister_wrapper)
 from .normalize import ObsNormalizer, RewardScaler, RunningMeanStd
 from .spaces import action_to_env, flatdim, obs_to_tensor
-from .wrappers import Discretizer
+from .wrappers import RAW_REWARD_KEY, Discretizer, RecordRawReward

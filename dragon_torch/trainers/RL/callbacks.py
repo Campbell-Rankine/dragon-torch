@@ -15,8 +15,13 @@ class StepEvalCallback:
     `every_steps` env steps, plus once when `total_steps` is reached.
 
     On epochs that evaluate it adds to the record:
-      {metric}          the raw evaluation (mean episode return)
+      {metric}          model.evaluate(): the mean episode return the model
+                        scores on (raw env reward by default, see
+                        DragonRLConfig.eval_return)
       {metric}_smooth   mean of the last `smooth_window` evaluations
+      {metric}_raw, {metric}_shaped
+                        both returns, when the evaluator's env has wrappers
+                        (so they can differ) and the model reports them
       eval_step         the scheduled step this evaluation stands for: the
                         largest multiple of every_steps crossed, capped at
                         total_steps. Epoch sizes (n_envs x n_steps) differ between
@@ -64,6 +69,10 @@ class StepEvalCallback:
         self.recent.append(value)
         record[self.metric] = value
         record[self.smooth_metric] = float(np.mean(self.recent))
+        stats = getattr(model, 'last_eval', None)
+        if getattr(self.evaluator, 'shaped', False) and stats:
+            record[f"{self.metric}_raw"] = stats['return']
+            record[f"{self.metric}_shaped"] = stats['shaped_return']
         record[EVAL_STEP_KEY] = due
 
     def state_dict(self) -> dict[str, Any]:

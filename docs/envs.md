@@ -91,4 +91,50 @@ How these paths behave:
 - **Earlier parts must exist.** Unknown fields, out-of-range indices and missing intermediate keys raise `KeyError`.
 - **Values are checked.** The changed spec is re-validated, so a bad kwarg is still caught.
 
-If a reward wrapper is part of the search, note that `episode_return` and `val_return` currently report the **shaped** reward. Trials with different shaping settings then aren't compared on the actual task. Separate tracking of the raw reward is the next stage of this work.
+Trials are scored on the env's raw reward, so tuning a reward-shaping wrapper compares trials on the actual task rather than on the shaping (see the next section).
+
+## Raw and shaped rewards
+
+Reward-shaping wrappers change what the agent trains on, not what the task is. The framework therefore tracks both:
+
+- **Raw:** the reward the env itself returns, before any of `env.wrappers`.
+- **Shaped:** the reward after all of `env.wrappers`, which is what the agent trains on.
+
+Neither is affected by reward normalisation (`rollout.normalize_reward`), which only scales the training signal.
+
+To capture the raw reward, `make_env_fn` puts a `RecordRawReward` wrapper directly around the base env, inside every configured wrapper. It copies each step's reward into `info['raw_reward']`. You don't need a special base class for your own wrappers: `gym.RewardWrapper`, `TransformReward`, `ClipReward` and custom `step` overrides are all captured.
+
+### History keys
+
+| Key | Meaning |
+|---|---|
+| `episode_return` | Mean **raw** return of training episodes finished this epoch |
+| `episode_return_shaped` | Mean shaped return of the same episodes |
+| `val_return` | What `model.evaluate()` scores: the **raw** return by default |
+| `val_return_raw`, `val_return_shaped` | Both evaluation returns |
+| `val_return_smooth` | The smoothed `val_return`; the default tuning objective |
+
+The `_shaped` and `_raw` keys only appear when `env.wrappers` is non-empty. Without wrappers the two returns are identical, so the history stays uncluttered.
+
+### Choosing what to optimise
+
+`DragonRLConfig.eval_return` sets what `evaluate()` returns, and with it what the tuning objective optimises:
+
+- `'raw'` (default) scores the task. Use it whenever wrappers shape the reward.
+- `'shaped'` scores the shaped reward. Use it when a wrapper *defines* the task, for example a wrapper that turns a sparse goal signal into the actual objective you care about.
+
+```python
+model=DragonRLConfig(..., eval_return='shaped')
+```
+
+### Where "raw" is measured
+
+"Raw" means the reward before the wrappers in `env.wrappers`. Anything the env does itself counts as raw:
+
+- an env subclass that changes the reward,
+- shaping inside an `env_fn` factory,
+- wrappers that `gym.make` adds from the env's registration.
+
+Put reward shaping in `env.wrappers` when you want it kept separate from the task.
+
+If a wrapper drops `info`, so that `raw_reward` never reaches the collector, the collector falls back to the reward it actually received for those steps.

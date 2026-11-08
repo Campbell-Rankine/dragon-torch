@@ -172,6 +172,8 @@ with PPOTrainer(cfg) as trainer:
 
 Configs that contain callables, such as `env_fn` or a lambda wrapper, store those callables as their `repr`, and you have to pass them in again when you rebuild. Wrappers given as `WrapperSpec`s save as data, so their configs rebuild exactly. See [envs.md](envs.md#wrappers-as-data).
 
+Returns are the env's raw reward unless you set `model.eval_return='shaped'`. With reward-shaping wrappers, the shaped returns are logged too, so tuning a shaping setting still scores trials on the task; see [envs.md](envs.md#raw-and-shaped-rewards).
+
 Every trial's history includes `val_return`, `val_return_smooth`, `episode_return`, `approx_kl`, `clip_frac`, `entropy`, `policy_loss`, `value_loss`, `lr`, `steps_per_sec` and `global_step`.
 
 ### Multi-objective
