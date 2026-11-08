@@ -1,37 +1,68 @@
+import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Union
 import numpy as np
 import optuna
+from pydantic import BaseModel
 from models.base import DataLike, EpochCallback, _DragonModel
-from trainers import DragonTrainer, DragonTrainerConfig
+from trainers import DragonTrainer, DragonTrainerConfig, TrainingDiverged
 from trainers.base import OptimizerLike
 from .config import Direction, TuneConfig
 from .reporting import JsonlLogger, OptunaReporter
 
 HISTORY_FILE = 'history.jsonl'
+CONFIG_FILE = 'config.json'
 
 
 @dataclass
 class TrialSpec:
-    """What `build` returns for one trial. Point the model's checkpoint_dir inside
-    the trial dir `build` is given so trials don't overwrite each other.
+    """What `build` returns for one trial: either a ready `trainer` (e.g. a
+    DragonRLTrainer, which brings its own data and callbacks), or the parts for
+    a plain DragonTrainer (`model`, `optimizer`, `train_data`). Point the model's
+    checkpoint_dir inside the trial dir `build` is given so trials don't
+    overwrite each other.
 
     `callbacks` run before the tuner's own (logger, reporter), so they can add
     metrics to the record, e.g. an evaluation that runs every N steps.
-    Anything here with a `close()` method (data, resources, callbacks) is
-    closed when the trial ends.
+    Anything here with a `close()` method (trainer, data, resources, callbacks)
+    is closed when the trial ends. A trainer whose `config` is a pydantic model
+    has it saved as config.json in the trial dir.
     """
-    model: _DragonModel
-    optimizer: OptimizerLike
-    train_data: DataLike
+    model: Optional[_DragonModel] = None
+    optimizer: Optional[OptimizerLike] = None
+    train_data: Optional[DataLike] = None
+    trainer: Optional[DragonTrainer] = None
     val_data: Optional[DataLike] = None
     epochs: Optional[int] = None
     callbacks: Sequence[EpochCallback] = ()
     trainer_config: Optional[DragonTrainerConfig] = None
     # extra objects to close() at the end (e.g. envs owned by a callback)
     resources: Sequence[Any] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if self.trainer is None and (self.model is None or self.optimizer is None
+                                     or self.train_data is None):
+            raise ValueError("TrialSpec needs a trainer, or model + optimizer + train_data")
+
+    def make_trainer(self) -> DragonTrainer:
+        if self.trainer is not None:
+            return self.trainer
+        return DragonTrainer(self.model, self.optimizer, self.trainer_config)
+
+    def closables(self) -> list[Any]:
+        return [self.trainer, self.train_data, self.val_data, *self.resources, *self.callbacks]
+
+
+def save_trainer_config(trainer: DragonTrainer, path: Path) -> Optional[Path]:
+    """Write trainer.config as JSON (callables such as env factories are written
+    as their repr, so the file documents the run even when it can't rebuild it)."""
+    cfg = getattr(trainer, 'config', None)
+    if not isinstance(cfg, BaseModel):
+        return None
+    path.write_text(cfg.model_dump_json(indent=2, fallback=repr))
+    return path
 
 
 type SuggestFn = Callable[[optuna.Trial], dict[str, Any]]
@@ -97,20 +128,26 @@ class DragonObjective:
         params = self.suggest(trial)
         spec = self.build(params, trial_dir)
         try:
-            trainer = DragonTrainer(spec.model, spec.optimizer, spec.trainer_config)
+            trainer = spec.make_trainer()
+            config_path = save_trainer_config(trainer, trial_dir / CONFIG_FILE)
+            if config_path is not None:
+                trial.set_user_attr('config_path', str(config_path))
             try:
                 history = trainer.fit(spec.train_data, spec.val_data, epochs=spec.epochs,
                                       callbacks=[*spec.callbacks, *self.callbacks(trial, trial_dir)])
             except optuna.TrialPruned as e:
                 trial.set_user_attr('prune_reason', str(e))  # shown in the dashboard
                 raise
+            except TrainingDiverged as e:
+                trial.set_user_attr('prune_reason', f"diverged: {e}")
+                raise optuna.TrialPruned(str(e)) from e
             if not history:
                 raise ValueError("training produced no epochs")
             trial.set_user_attr('epochs', len(history))
             trial.set_user_attr('last_record', {k: float(v) for k, v in history[-1].items()})
             values = objective_values(history, self.cfg)
         finally:
-            for obj in (spec.train_data, spec.val_data, *spec.resources, *spec.callbacks):
+            for obj in spec.closables():
                 close = getattr(obj, 'close', None)
                 if callable(close):
                     close()

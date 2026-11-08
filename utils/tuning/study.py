@@ -22,7 +22,8 @@ def best_summary(study: optuna.Study) -> dict[str, Any]:
     """Best trial (single objective) or the Pareto front (multi-objective)."""
     def row(t: optuna.trial.FrozenTrial) -> dict[str, Any]:
         return {'number': t.number, 'values': t.values, 'params': t.params,
-                'trial_dir': t.user_attrs.get('trial_dir')}
+                'trial_dir': t.user_attrs.get('trial_dir'),
+                'config_path': t.user_attrs.get('config_path')}
 
     complete = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
     if not complete:

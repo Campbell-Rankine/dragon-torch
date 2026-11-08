@@ -15,8 +15,9 @@ uv sync --extra tune   # adds optuna-dashboard; optuna itself is a core dependen
 | `reporting.py` | Epoch callbacks: `OptunaReporter` (`trial.report` and pruning) and `JsonlLogger` (every epoch record goes to `history.jsonl`) |
 | `study.py` | `run_study`, `create_study`, `load_study`, `best_summary` |
 | `monitor.py` | CLI with `summary`, `export` (CSV) and `dashboard` |
-| `RL.py` | `StepEvalCallback`, `DivergenceGuard` / `TrialDiverged`, `rl_tune_config`. Needs the `RL` extra |
-| `presets/ppo.py` | `PPOSpace` (search space) and `PPOBuilder` (builds a trial). Needs the `RL` extra |
+| `space.py` | `SearchSpace` with `FloatParam`, `IntParam` and `CategoricalParam`. Parameters are named by config path, for example `optim.lr` |
+| `RL.py` | `rl_tune_config` and `RLTrialBuilder`, for any `DragonRLTrainer`. Needs the `RL` extra |
+| `presets/` | `ppo_space()` and `a2c_space()`: search spaces over the PPO and A2C trainer configs |
 
 The tuner relies on the epoch-callback hook in `DragonModel.fit` / `DragonTrainer.fit` (`models.base.EpochCallback`). After each epoch, the hook gets the model and that epoch's history record. A callback can:
 
@@ -98,75 +99,87 @@ Optuna can't prune multi-objective studies, because `trial.report` isn't support
 
 ## RL training runs
 
-`utils.tuning.RL` and `utils.tuning.presets` specialise the base tuner for `DragonRLModel`. To run a PPO study directly:
+RL studies tune a `DragonRLTrainer` (`PPOTrainer` or `A2CTrainer`). [rl_trainers.md](rl_trainers.md) describes the trainers and their configs; this section covers the tuning side. To run a study directly:
 
 ```bash
-uv run --extra RL --extra torch-cpu python scripts/tune_ppo.py --env CartPole-v1 \
+uv run --extra RL --extra torch-cpu python scripts/tune_rl.py --algo ppo --env CartPole-v1 \
     --storage journal:runs/optuna.log --timesteps 100000 --eval-every 10000 --n-trials 20
 ```
 
-You can run that command in several terminals at once; every worker joins the same study. In code:
+You can run that command in several terminals at once; every worker joins the same study. Use `--algo a2c` for A2C. In code:
 
 ```python
 from data.envs import DragonEnvConfig
+from models.RL import DragonRLConfig
+from trainers.RL import EvalConfig, PPOTrainer, PPOTrainerConfig
 from utils.tuning import run_study
-from utils.tuning.presets import PPOBuilder, PPOSpace
-from utils.tuning.RL import rl_tune_config
+from utils.tuning.presets import ppo_space
+from utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
-cfg = rl_tune_config('ppo-cartpole', storage='journal:runs/optuna.log',
+base = PPOTrainerConfig(
+    env=DragonEnvConfig(env_id='CartPole-v1', n_envs=8),
+    model=DragonRLConfig(checkpoint_dir='runs/unused', save_every=1_000_000, total_timesteps=100_000),
+    eval=EvalConfig(every_steps=10_000, n_episodes=10, smooth_window=3))
+cfg = rl_tune_config('ppo-cartpole', PPOTrainer, storage='journal:runs/optuna.log',
                      n_trials=20, n_warmup_steps=20_000)          # warmup in env steps
-build = PPOBuilder(env=DragonEnvConfig(env_id='CartPole-v1', n_envs=8),
-                   total_timesteps=100_000, eval_every_steps=10_000,
-                   eval_episodes=10, smooth_window=3)
-run_study(cfg, PPOSpace(fixed={'gamma': 0.99}).suggest, build)
+space = ppo_space().fix({'rollout.gamma': 0.99})
+run_study(cfg, space.suggest, RLTrialBuilder(trainer_cls=PPOTrainer, base_config=base))
 ```
 
-### Evaluation and objective
+For each trial, `RLTrialBuilder` takes the sampled parameters, applies them to `base_config` with `apply_overrides`, and sets `model.checkpoint_dir` to `trial_dir/ckpt`. It then returns `TrialSpec(trainer=...)`. The objective trains the trainer, adds the tuner's callbacks after the trainer's own, and closes it at the end, including when the trial is pruned.
 
-`StepEvalCallback` runs `model.evaluate(EpisodeSource)` every `eval_every_steps` env steps, and once more when `total_timesteps` is reached. Each evaluation adds three values to that epoch's record:
+### Objective and pruning
 
-| Key | Value |
-|---|---|
-| `val_return` | Mean return over this evaluation's episodes (raw) |
-| `val_return_smooth` | Mean of the last `smooth_window` evaluations |
-| `eval_step` | The scheduled step this evaluation stands for: a multiple of `eval_every_steps`, capped at `total_timesteps` |
-
-`rl_tune_config` sets the objective to the final `val_return_smooth` (maximised) and reports it to the pruner at `eval_step`.
+`rl_tune_config` takes its objective from `trainer_cls.objectives`: the final `val_return_smooth`, maximised. It reports that value to the pruner at `eval_step`. The trainer's `StepEvalCallback` produces both values; see [rl_trainers.md](rl_trainers.md#evaluation).
 
 The pruner compares trials at the **same reported step**, which is why it uses `eval_step`. An epoch is `n_envs × n_steps` env steps, and `n_steps` is a hyperparameter, so `global_step` values differ from trial to trial and would never match. The scheduled steps are the same for every trial.
 
-Set `eval_every_steps` to at least the largest epoch in the search space. An epoch that crosses two thresholds evaluates only once, and that trial skips a scheduled step.
+- **Evaluation interval:** keep `eval.every_steps` at or above the largest epoch in the search space. An epoch that crosses two thresholds evaluates only once, and that trial skips a scheduled step.
+- **Seeds:** every trial uses `base_config`'s seeds, so differences come from the hyperparameters rather than luck. If scores are still noisy, raise `eval.n_episodes` or `eval.smooth_window`.
+- **Divergence:** the trainer's `DivergenceGuard` raises `TrainingDiverged`. The objective converts it to a pruned trial, and `prune_reason` starts with `diverged:`. This works in multi-objective studies too.
 
-Every trial uses the same env and init seeds, so differences come from the hyperparameters rather than luck. The eval env defaults to the training env with one sub-env and `seed + 10_000`. If scores are still noisy, raise `eval_episodes` or `smooth_window`.
+### Search spaces
 
-### Divergence guard
+A `SearchSpace` names its parameters by config path, so the values it samples apply directly onto the trainer config, and the dashboard shows names like `rollout.n_steps`.
 
-`DivergenceGuard` raises `TrialDiverged`, a subclass of `TrialPruned`, so a run that has blown up is stopped instead of using up its budget. This works in multi-objective studies too. The guard triggers on any of:
+| Preset | Parameters |
+|---|---|
+| `ppo_space()` | `optim.lr`, `optim.anneal_lr`, `rollout.{n_steps, n_minibatches, update_epochs, gamma, gae_lambda, normalize_obs}`, `ppo.{clip_coef, ent_coef, vf_coef}`, `model.max_grad_norm`, `policy.hidden` |
+| `a2c_space()` | `optim.lr`, `optim.anneal_lr`, `rollout.{n_steps, gamma, gae_lambda, normalize_obs}`, `a2c.{ent_coef, vf_coef, normalize_advantages}`, `model.max_grad_norm`, `policy.hidden` |
 
-- a NaN or inf `train_loss`, `policy_loss` or `value_loss`
-- `approx_kl > max_kl` for `patience` epochs in a row
-- `entropy < min_entropy` after `entropy_after_steps` env steps (optional)
+To customise a preset:
 
-The guard only checks keys that the record contains, so it also works with A2C, which records no KL.
+- `.fix({...})` pins values; pinned parameters aren't sampled.
+- `.narrow({...})` replaces ranges.
+- `.without(...)` drops parameters, so the base config's values are used.
 
-### PPO search space
+The `n_steps` and `n_minibatches` choices are powers of two, so they always divide evenly. The config validator rejects combinations that don't.
 
-`PPOSpace` covers these parameters:
+### What each trial saves
 
-- `lr` and `ent_coef` (log scale)
-- `n_steps`, `n_minibatches`, `update_epochs`
-- `gamma`, `gae_lambda`, `clip_coef`, `vf_coef`, `max_grad_norm`
-- `hidden` (for example `'64x64'`)
-- `normalize_obs`
+Besides `history.jsonl`, each trial directory holds:
 
-To narrow the space, override any field. To pin a parameter, use `fixed={...}`; a pinned parameter isn't sampled. The choices are powers of two, so `n_steps × n_envs` always divides evenly into minibatches.
+- `ckpt/`
+- `config.json`: the fully resolved trainer config.
 
-Everything a trial records is in its `history.jsonl`: `episode_return`, `approx_kl`, `clip_frac`, `entropy`, `policy_loss`, `value_loss`, `steps_per_sec` and `global_step`.
-
-For multi-objective studies, for example return versus throughput:
+`best.json` entries link to `config.json`. To rebuild the best run exactly:
 
 ```python
-rl_tune_config('ppo-mo', extra_metrics={'steps_per_sec': 'maximize'})   # or: scripts/tune_ppo.py --multi-objective
+cfg = PPOTrainerConfig.model_validate_json(open('runs/ppo-cartpole/trial_0007/config.json').read())
+with PPOTrainer(cfg) as trainer:
+    trainer.fit()
+```
+
+Configs that contain callables, such as `env_fn` or wrappers, store those callables as their `repr`. Pass them in again when you rebuild.
+
+Every trial's history includes `val_return`, `val_return_smooth`, `episode_return`, `approx_kl`, `clip_frac`, `entropy`, `policy_loss`, `value_loss`, `lr`, `steps_per_sec` and `global_step`.
+
+### Multi-objective
+
+To tune for two objectives, for example return versus throughput:
+
+```python
+rl_tune_config('ppo-mo', PPOTrainer, extra_metrics={'steps_per_sec': 'maximize'})   # or: scripts/tune_rl.py --multi-objective
 ```
 
 ## Storage and workers

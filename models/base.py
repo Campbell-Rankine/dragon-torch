@@ -171,6 +171,9 @@ class DragonModel(_DragonModel[ModelDtype]):
         self.train_source: Optional[DataLike] = None
         # source state loaded from a checkpoint before any source was bound
         self._pending_source_state: Optional[dict] = None
+        # other objects checkpointed alongside the model (see register_state)
+        self._registered_state: dict[str, Any] = {}
+        self._pending_registered_state: dict[str, dict] = {}
 
     # ------- torch.nn.Module passthroughs ------- #
     def parameters(self, recurse: bool = True) -> Iterator[torch.nn.Parameter]:
@@ -357,14 +360,32 @@ class DragonModel(_DragonModel[ModelDtype]):
         self.load_extra_state(state.get('extra_state') or {})
         return self.epoch
 
+    def register_state(self, name: str, obj: Any) -> None:
+        """Checkpoint `obj` (anything with state_dict / load_state_dict, e.g. a
+        trainer's eval callback) with the model under `name`. If a checkpoint
+        with that name was already loaded, its state is applied now."""
+        if not (hasattr(obj, 'state_dict') and hasattr(obj, 'load_state_dict')):
+            raise TypeError(f"{type(obj)} needs state_dict() and load_state_dict()")
+        self._registered_state[name] = obj
+        if name in self._pending_registered_state:
+            obj.load_state_dict(self._pending_registered_state.pop(name))
+
     def extra_state(self) -> dict[str, Any]:
         """Non-parameter state to checkpoint. Subclasses extend it, e.g.
         `return {**super().extra_state(), 'global_step': self.global_step}`."""
+        state: dict[str, Any] = {}
         if self.train_source is not None and hasattr(self.train_source, 'state_dict'):
-            return {'train_source': self.train_source.state_dict()}
-        return {}
+            state['train_source'] = self.train_source.state_dict()
+        if self._registered_state:
+            state['registered'] = {k: v.state_dict() for k, v in self._registered_state.items()}
+        return state
 
     def load_extra_state(self, state: dict[str, Any]) -> None:
+        for name, obj_state in (state.get('registered') or {}).items():
+            if name in self._registered_state:
+                self._registered_state[name].load_state_dict(obj_state)
+            else:
+                self._pending_registered_state[name] = obj_state
         source_state = state.get('train_source')
         if source_state is None:
             return

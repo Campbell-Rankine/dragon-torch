@@ -1,187 +1,141 @@
 import json
-import math
 import optuna
 import pytest
 from data.envs import DragonEnvConfig
-from utils.tuning import DragonObjective, read_history, run_study
-from utils.tuning.presets import PPOBuilder, PPOSpace
-from utils.tuning.presets.ppo import parse_hidden
-from utils.tuning.RL import (EVAL_STEP_KEY, DivergenceGuard, StepEvalCallback, TrialDiverged,
-                             rl_tune_config)
+from models.RL import DragonRLConfig
+from trainers.RL import (EVAL_STEP_KEY, A2CTrainer, A2CTrainerConfig, EvalConfig, GuardConfig,
+                         OptimConfig, PPOTrainer, PPOTrainerConfig)
+from utils.tuning import (CategoricalParam, DragonObjective, FloatParam, IntParam, SearchSpace,
+                          TrialSpec, read_history, run_study)
+from utils.tuning.presets import a2c_space, ppo_space
+from utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 COMPLETE, PRUNED = optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED
 
 
-class FakeModel:
-    def __init__(self, values):
-        self.values = iter(values)
-        self.evaluated = 0
-
-    def evaluate(self, data):
-        self.evaluated += 1
-        return next(self.values)
+class AlwaysPrune(optuna.pruners.BasePruner):
+    def prune(self, study, trial):
+        return True
 
 
-class Closable:
-    closed = False
+class TestSearchSpace:
+    def test_suggest_fix_narrow_without(self):
+        space = SearchSpace(params={'a.x': FloatParam(low=0.1, high=1.0, log=True),
+                                    'a.n': IntParam(low=1, high=3),
+                                    'b': CategoricalParam(choices=['64x64', '8x8'])})
+        trial = optuna.create_study().ask()
+        params = space.fix({'a.n': 7}).suggest(trial)
+        assert params['a.n'] == 7 and 'a.n' not in trial.params
+        assert 0.1 <= params['a.x'] <= 1.0 and params['b'] in ('64x64', '8x8')
+        narrowed = space.narrow({'b': CategoricalParam(choices=['8x8'])})
+        assert narrowed.suggest(optuna.create_study().ask())['b'] == '8x8'
+        assert set(space.without('b').params) == {'a.x', 'a.n'}
 
-    def close(self):
-        self.closed = True
+    def test_validation_and_json(self):
+        with pytest.raises(ValueError):
+            FloatParam(low=0.0, high=1.0, log=True)
+        space = ppo_space()
+        assert SearchSpace.model_validate_json(space.model_dump_json()) == space
 
-
-def run_epochs(callback, model, steps):
-    records = [{'epoch': i + 1, 'global_step': s} for i, s in enumerate(steps)]
-    for r in records:
-        callback(model, r)
-    return records
-
-
-class TestStepEvalCallback:
-    def test_schedule_and_aligned_steps(self):
-        cb = StepEvalCallback(None, every_steps=100, total_steps=250, smooth_window=2)
-        model = FakeModel([1.0, 3.0, 5.0])
-        records = run_epochs(cb, model, [60, 120, 180, 240, 300])
-        evals = [r for r in records if 'val_return' in r]
-        # global_steps 120, 240, 300 evaluate, reported at the scheduled 100, 200, 250 (capped)
-        assert [r['global_step'] for r in evals] == [120, 240, 300]
-        assert [r[EVAL_STEP_KEY] for r in evals] == [100, 200, 250]
-        assert [r['val_return'] for r in evals] == [1.0, 3.0, 5.0]
-        assert [r['val_return_smooth'] for r in evals] == [1.0, 2.0, 4.0]
-        assert model.evaluated == 3
-
-    def test_epoch_crossing_two_thresholds_evaluates_once(self):
-        cb = StepEvalCallback(None, every_steps=10)
-        records = run_epochs(cb, FakeModel([7.0]), [35])
-        assert records[0][EVAL_STEP_KEY] == 30
-
-    def test_final_eval_not_repeated(self):
-        cb = StepEvalCallback(None, every_steps=100, total_steps=200)
-        model = FakeModel([1.0, 2.0])
-        run_epochs(cb, model, [100, 200, 260])
-        assert model.evaluated == 2
-
-    def test_needs_step_key_and_closes_evaluator(self):
-        evaluator = Closable()
-        cb = StepEvalCallback(evaluator, every_steps=10)
-        with pytest.raises(KeyError, match='global_step'):
-            cb(FakeModel([]), {'epoch': 1})
-        cb.close()
-        assert evaluator.closed
-
-
-class TestDivergenceGuard:
-    def test_kl_needs_patience(self):
-        guard = DivergenceGuard(max_kl=0.1, patience=2)
-        guard(None, {'approx_kl': 0.5, 'global_step': 1})
-        guard(None, {'approx_kl': 0.01, 'global_step': 2})  # resets the streak
-        guard(None, {'approx_kl': 0.5, 'global_step': 3})
-        with pytest.raises(TrialDiverged, match='approx_kl'):
-            guard(None, {'approx_kl': 0.5, 'global_step': 4})
-
-    def test_non_finite_loss(self):
-        with pytest.raises(TrialDiverged, match='train_loss'):
-            DivergenceGuard()(None, {'train_loss': math.nan, 'global_step': 1})
-
-    def test_entropy_collapse_after_warmup(self):
-        guard = DivergenceGuard(max_kl=None, min_entropy=0.1, entropy_after_steps=100)
-        guard(None, {'entropy': 0.01, 'global_step': 50})
-        with pytest.raises(TrialDiverged, match='entropy'):
-            guard(None, {'entropy': 0.01, 'global_step': 100})
-
-    def test_missing_keys_ignored(self):
-        DivergenceGuard(min_entropy=0.1)(None, {'epoch': 1})  # e.g. A2C: no approx_kl
-
-    def test_is_a_prune(self):
-        assert issubclass(TrialDiverged, optuna.TrialPruned)
+    def test_presets_match_their_configs(self, tmp_path):
+        """Every preset key is a real config path."""
+        model = DragonRLConfig(checkpoint_dir=tmp_path, save_every=1, total_timesteps=1000)
+        for space, cfg_cls in ((ppo_space(), PPOTrainerConfig), (a2c_space(), A2CTrainerConfig)):
+            builder = RLTrialBuilder(trainer_cls=PPOTrainer,
+                                     base_config=cfg_cls(env=DragonEnvConfig(env_id='CartPole-v1'),
+                                                         model=model))
+            params = space.suggest(optuna.create_study().ask())
+            cfg = builder.config_for(params, tmp_path / 't')
+            assert cfg.rollout.n_steps == params['rollout.n_steps']
+            assert cfg.model.checkpoint_dir == tmp_path / 't' / 'ckpt'
 
 
 class TestRLTuneConfig:
-    def test_defaults(self):
-        cfg = rl_tune_config('rl')
+    def test_defaults_from_trainer(self):
+        cfg = rl_tune_config('rl', PPOTrainer)
         assert cfg.metrics == ['val_return_smooth'] and cfg.directions == ['maximize']
         assert cfg.report_key == EVAL_STEP_KEY and cfg.can_prune
 
     def test_multi_objective(self):
-        cfg = rl_tune_config('rl', extra_metrics={'steps_per_sec': 'maximize'})
-        assert cfg.metrics == ['val_return_smooth', 'steps_per_sec']
-        assert cfg.directions == ['maximize', 'maximize'] and not cfg.can_prune
-
-
-class TestPPOPreset:
-    def test_space_and_fixed(self):
-        params = PPOSpace(fixed={'gamma': 0.9, 'hidden': '32x32'}).suggest(
-            optuna.create_study().ask())
-        assert params['gamma'] == 0.9 and params['hidden'] == '32x32'
-        study = optuna.create_study()
-        trial = study.ask()
-        PPOSpace(fixed={'gamma': 0.9}).suggest(trial)
-        assert 'gamma' not in trial.params and 'lr' in trial.params
-
-    def test_parse_hidden(self):
-        assert parse_hidden('128x64') == (128, 64) and parse_hidden([8]) == (8,)
+        cfg = rl_tune_config('rl', A2CTrainer, extra_metrics={'steps_per_sec': 'maximize'})
+        assert cfg.metrics == ['val_return_smooth', 'steps_per_sec'] and not cfg.can_prune
 
 
 def small_space(**fixed):
-    return PPOSpace(n_steps=[16, 32], n_minibatches=[1, 2], update_epochs=(1, 2),
-                    hidden=['16x16'], fixed=fixed)
+    space = ppo_space().narrow({
+        'rollout.n_steps': CategoricalParam(choices=[16, 32]),
+        'rollout.n_minibatches': CategoricalParam(choices=[1, 2]),
+        'rollout.update_epochs': IntParam(low=1, high=2),
+        'policy.hidden': CategoricalParam(choices=['16x16']),
+    })
+    return space.fix(fixed)
 
 
-def builder(**kw):
-    kw.setdefault('total_timesteps', 512)
-    kw.setdefault('eval_every_steps', 128)  # >= 32 steps x 4 envs
-    kw.setdefault('eval_episodes', 2)
-    return PPOBuilder(env=DragonEnvConfig(env_id='CartPole-v1', n_envs=4), **kw)
+def builder(tmp_path, trainer_cls=PPOTrainer, cfg_cls=PPOTrainerConfig, total=512, **kw):
+    base = cfg_cls(env=DragonEnvConfig(env_id='CartPole-v1', n_envs=4),
+                   model=DragonRLConfig(checkpoint_dir=tmp_path / 'unused', save_every=1000,
+                                        total_timesteps=total),
+                   rollout=cfg_cls.model_fields['rollout'].default_factory().model_copy(
+                       update={'n_steps': 16, 'n_minibatches': 1}),
+                   eval=EvalConfig(every_steps=128, n_episodes=2), **kw)  # 128 >= 32 x 4
+    return RLTrialBuilder(trainer_cls=trainer_cls, base_config=base)
 
 
-class TestPPOStudy:
-    def test_cartpole_study(self, tmp_path):
-        cfg = rl_tune_config('ppo', storage=f"sqlite:///{tmp_path / 'o.db'}",
+class TestRLStudy:
+    def test_ppo_study(self, tmp_path):
+        cfg = rl_tune_config('ppo', PPOTrainer, storage=f"sqlite:///{tmp_path / 'o.db'}",
                              run_dir=tmp_path / 'runs', n_trials=3, seed=0, pruner='none')
-        study = run_study(cfg, small_space().suggest, builder())
+        study = run_study(cfg, small_space().suggest, builder(tmp_path))
         assert [t.state for t in study.trials] == [COMPLETE] * 3
         for t in study.trials:
             # every trial reports at the same aligned steps, whatever its epoch size
             assert sorted(t.intermediate_values) == [128, 256, 384, 512]
-            history = read_history(f"{t.user_attrs['trial_dir']}/history.jsonl")
-            evals = [r for r in history if 'val_return_smooth' in r]
-            assert t.value == evals[-1]['val_return_smooth']
-            assert history[-1]['global_step'] >= 512
-            assert {'approx_kl', 'entropy', 'steps_per_sec'} <= set(history[-1])
-        assert json.loads((cfg.study_dir / 'best.json').read_text())['best']
+            trial_dir = t.user_attrs['trial_dir']
+            history = read_history(f"{trial_dir}/history.jsonl")
+            assert t.value == [r for r in history if 'val_return_smooth' in r][-1]['val_return_smooth']
+            assert {'approx_kl', 'entropy', 'steps_per_sec', 'lr'} <= set(history[-1])
+            saved = PPOTrainerConfig.model_validate_json(open(t.user_attrs['config_path']).read())
+            assert saved.rollout.n_steps == t.params['rollout.n_steps']
+            assert str(saved.model.checkpoint_dir).startswith(trial_dir)
+        best = json.loads((cfg.study_dir / 'best.json').read_text())['best'][0]
+        assert best['config_path'].endswith('config.json')
 
-    def test_pruned_trials_close_envs(self, tmp_path):
-        class AlwaysPrune(optuna.pruners.BasePruner):
-            def prune(self, study, trial):
-                return True
-
-        built = []
-        build = builder()
+    def test_pruned_trial_closes_trainer(self, tmp_path):
+        trainers = []
+        build = builder(tmp_path)
 
         def tracking_build(params, trial_dir):
             spec = build(params, trial_dir)
-            built.append(spec)
+            trainers.append(spec.trainer)
             return spec
 
-        cfg = rl_tune_config('ppo', run_dir=tmp_path / 'runs')
+        cfg = rl_tune_config('ppo', PPOTrainer, run_dir=tmp_path / 'runs')
         study = optuna.create_study(direction='maximize', pruner=AlwaysPrune())
         study.optimize(DragonObjective(cfg, small_space().suggest, tracking_build), n_trials=1)
         t = study.trials[0]
         assert t.state == PRUNED and t.last_step == 128 and 'prune_reason' in t.user_attrs
-        spec = built[0]
-        assert spec.train_data.collector.env.closed
-        assert spec.callbacks[0].evaluator.collector.env.closed
+        assert trainers[0].source.collector.env.closed
+        assert trainers[0].evaluator.collector.env.closed
 
     def test_divergence_prunes(self, tmp_path):
-        cfg = rl_tune_config('ppo', run_dir=tmp_path / 'runs', n_trials=1)
-        study = run_study(cfg, small_space(lr=0.5, update_epochs=2).suggest,
-                          builder(max_kl=1e-6, kl_patience=1))
+        cfg = rl_tune_config('ppo', PPOTrainer, run_dir=tmp_path / 'runs', n_trials=1)
+        study = run_study(cfg, small_space(**{'optim.lr': 0.5}).suggest,
+                          builder(tmp_path, guard=GuardConfig(max_kl=1e-9, kl_patience=1)))
         t = study.trials[0]
-        assert t.state == PRUNED and 'approx_kl' in t.user_attrs['prune_reason']
+        assert t.state == PRUNED and t.user_attrs['prune_reason'].startswith('diverged: approx_kl')
 
-    def test_multi_objective(self, tmp_path):
-        cfg = rl_tune_config('ppo-mo', run_dir=tmp_path / 'runs', n_trials=2,
+    def test_a2c_multi_objective(self, tmp_path):
+        cfg = rl_tune_config('a2c-mo', A2CTrainer, run_dir=tmp_path / 'runs', n_trials=2,
                              extra_metrics={'steps_per_sec': 'maximize'})
-        study = run_study(cfg, small_space().suggest, builder(total_timesteps=256))
+        space = a2c_space().narrow({'rollout.n_steps': CategoricalParam(choices=[8, 16]),
+                                    'policy.hidden': CategoricalParam(choices=['16x16'])})
+        study = run_study(cfg, space.suggest,
+                          builder(tmp_path, A2CTrainer, A2CTrainerConfig, total=256,
+                                  optim=OptimConfig(name='rmsprop', lr=7e-4)))
         assert all(t.state == COMPLETE and len(t.values) == 2 for t in study.trials)
         assert study.best_trials
+
+    def test_trial_spec_needs_trainer_or_parts(self):
+        with pytest.raises(ValueError, match='trainer'):
+            TrialSpec()

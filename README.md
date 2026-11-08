@@ -29,7 +29,7 @@ uv run --extra test --extra torch-cpu --extra torch-ext pytest -m "not network" 
 
 ### Tuning / monitoring:
 
-`utils/tuning/` runs optuna studies over any `_DragonModel` (pruning, multi-objective, shared storage for parallel workers) and serves them in `optuna-dashboard`. `utils/tuning/RL.py` and `utils/tuning/presets/` add step-scheduled evaluation, a divergence guard and a PPO search space; `scripts/tune_ppo.py` runs a study worker. See [docs/tuning.md](docs/tuning.md).
+`utils/tuning/` runs optuna studies over any `_DragonModel` (pruning, multi-objective, shared storage for parallel workers) and serves them in `optuna-dashboard`. `utils/tuning/RL.py` and `utils/tuning/presets/` tune any RL trainer with PPO / A2C search spaces; `scripts/tune_rl.py` runs a study worker. See [docs/tuning.md](docs/tuning.md).
 
 ```bash
 uv sync --extra tune
@@ -57,6 +57,7 @@ python -m utils.tuning.monitor dashboard --storage sqlite:///runs/optuna.db
 | Networks | `modules/RL/` | `ActorCritic`, `PolicyOutput`, and distribution heads for Discrete, MultiDiscrete, MultiBinary and Box actions |
 | Losses | `loss/RL.py` | `PPOLoss` and `A2CLoss`; each records its components (KL, clip fraction, entropy) |
 | Model | `models/RL/base.py` | `DragonRLModel` adds gradient clipping and returns episode return from `evaluate`. Its epoch count comes from `total_timesteps`, minus the steps already taken |
+| Trainers | `trainers/RL/` | `DragonRLTrainer` builds a whole run from one config: rollout source, evaluator, network, loss, optimizer, LR annealing, step-scheduled eval and a divergence guard. `PPOTrainer` and `A2CTrainer` add their loss. See [docs/rl_trainers.md](docs/rl_trainers.md) |
 | SB3 | `modules/external/sb3.py` | `DragonFeaturesExtractor` and `sb3_policy_kwargs` |
 
 
