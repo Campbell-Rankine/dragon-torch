@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Generic, Callable, ClassVar, Any, Iterable, Iterator, Optional, Union
+from typing import Generic, Callable, ClassVar, Any, Iterable, Iterator, Optional, Protocol, Sequence, Union
 from abc import abstractmethod, ABC
 from torch.utils.data import DataLoader, IterableDataset
 from pathlib import Path
@@ -12,6 +12,19 @@ from loss import DragonLossFunction
 
 type Batch = Any
 type DataLike = Iterable[Batch]
+
+
+class EpochCallback(Protocol):
+    """Called by fit() after each epoch's history record is built.
+
+    `record` is the live dict that goes into history, so a callback may add keys
+    (e.g. an evaluation it ran) for later callbacks and the returned history.
+    Return True to stop training after this epoch (a checkpoint is still saved).
+    Exceptions propagate out of fit() unhandled, e.g. optuna.TrialPruned; no
+    checkpoint is written for that epoch.
+    """
+
+    def __call__(self, model: "_DragonModel", record: dict[str, float]) -> Optional[bool]: ...
 
 
 class _DragonModel(ABC, Generic[ModelDtype]):
@@ -75,7 +88,8 @@ class _DragonModel(ABC, Generic[ModelDtype]):
     @abstractmethod
     def fit(self, train_data: DataLike, optimizer: torch.optim.Optimizer,
             val_data: Optional[DataLike] = None,
-            epochs: Optional[int] = None) -> list[dict[str, float]]: ...
+            epochs: Optional[int] = None,
+            callbacks: Sequence[EpochCallback] = ()) -> list[dict[str, float]]: ...
 
     # ------- checkpoints ------- #
     @abstractmethod
@@ -157,6 +171,9 @@ class DragonModel(_DragonModel[ModelDtype]):
         self.train_source: Optional[DataLike] = None
         # source state loaded from a checkpoint before any source was bound
         self._pending_source_state: Optional[dict] = None
+        # other objects checkpointed alongside the model (see register_state)
+        self._registered_state: dict[str, Any] = {}
+        self._pending_registered_state: dict[str, dict] = {}
 
     # ------- torch.nn.Module passthroughs ------- #
     def parameters(self, recurse: bool = True) -> Iterator[torch.nn.Parameter]:
@@ -264,9 +281,14 @@ class DragonModel(_DragonModel[ModelDtype]):
         return float(np.mean(losses))
 
     def fit(self, train_data: DataLike, optimizer: torch.optim.Optimizer,
-            val_data: Optional[DataLike] = None, epochs: Optional[int] = None) -> list[dict[str, float]]:
+            val_data: Optional[DataLike] = None, epochs: Optional[int] = None,
+            callbacks: Sequence[EpochCallback] = ()) -> list[dict[str, float]]:
         """Train for `epochs` (default cfg.max_epochs) more epochs, checkpointing
-        every cfg.save_every epochs and after the last one. Returns per-epoch history."""
+        every cfg.save_every epochs and after the last one. Returns per-epoch history.
+
+        `callbacks` run in order after each epoch (see EpochCallback); all of them
+        run even if an earlier one asks to stop, then training stops early with a
+        checkpoint."""
         epochs = self.config.max_epochs if epochs is None else epochs
         self.bind(train_data, train=True)
         history = []
@@ -287,8 +309,13 @@ class DragonModel(_DragonModel[ModelDtype]):
                 record.update({k: v for k, v in train_data.metrics().items()
                                if k not in record})
             history.append(record)
-            if self.epoch % self.config.save_every == 0 or len(history) == epochs:
+            stop = False
+            for callback in callbacks:
+                stop = bool(callback(self, record)) or stop
+            if stop or self.epoch % self.config.save_every == 0 or len(history) == epochs:
                 self.save_checkpoint(optimizer)
+            if stop:
+                break
         return history
 
     def epoch_metrics(self) -> dict[str, float]:
@@ -333,14 +360,32 @@ class DragonModel(_DragonModel[ModelDtype]):
         self.load_extra_state(state.get('extra_state') or {})
         return self.epoch
 
+    def register_state(self, name: str, obj: Any) -> None:
+        """Checkpoint `obj` (anything with state_dict / load_state_dict, e.g. a
+        trainer's eval callback) with the model under `name`. If a checkpoint
+        with that name was already loaded, its state is applied now."""
+        if not (hasattr(obj, 'state_dict') and hasattr(obj, 'load_state_dict')):
+            raise TypeError(f"{type(obj)} needs state_dict() and load_state_dict()")
+        self._registered_state[name] = obj
+        if name in self._pending_registered_state:
+            obj.load_state_dict(self._pending_registered_state.pop(name))
+
     def extra_state(self) -> dict[str, Any]:
         """Non-parameter state to checkpoint. Subclasses extend it, e.g.
         `return {**super().extra_state(), 'global_step': self.global_step}`."""
+        state: dict[str, Any] = {}
         if self.train_source is not None and hasattr(self.train_source, 'state_dict'):
-            return {'train_source': self.train_source.state_dict()}
-        return {}
+            state['train_source'] = self.train_source.state_dict()
+        if self._registered_state:
+            state['registered'] = {k: v.state_dict() for k, v in self._registered_state.items()}
+        return state
 
     def load_extra_state(self, state: dict[str, Any]) -> None:
+        for name, obj_state in (state.get('registered') or {}).items():
+            if name in self._registered_state:
+                self._registered_state[name].load_state_dict(obj_state)
+            else:
+                self._pending_registered_state[name] = obj_state
         source_state = state.get('train_source')
         if source_state is None:
             return

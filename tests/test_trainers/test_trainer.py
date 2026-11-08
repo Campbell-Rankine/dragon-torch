@@ -2,7 +2,7 @@ import pytest
 import torch
 from models.base import DragonModel, DragonModelConfig
 from modules import DragonModule
-from trainers import DragonTrainer, DragonTrainerConfig
+from trainers import DragonTrainer, DragonTrainerConfig, linear_schedule
 
 IN_DIM = 3
 TRUE_W = torch.tensor([[1.5], [-2.0], [0.5]])
@@ -112,3 +112,110 @@ class TestDragonTrainer:
         source = CountingSource()
         DragonTrainer(make_model(cfg), sgd, DragonTrainerConfig(resume=True)).fit(source, epochs=1)
         assert source.served == 18  # 12 restored + 6 from the resumed epoch
+
+
+class TestEpochCallbacks:
+    def test_receives_every_record(self, cfg):
+        seen = []
+        trainer = DragonTrainer(make_model(cfg), sgd)
+        history = trainer.fit(batches(), val_data=batches(2, seed=1),
+                              callbacks=[lambda model, record: seen.append((model, dict(record)))])
+        assert [r for _, r in seen] == history
+        assert all(m is trainer.model for m, _ in seen)
+        assert 'val_loss' in seen[0][1]
+
+    def test_can_add_keys_for_later_callbacks(self, cfg):
+        def add(model, record):
+            record['extra'] = record['epoch'] * 10
+
+        later = []
+        history = DragonTrainer(make_model(cfg), sgd).fit(
+            batches(), callbacks=[add, lambda m, r: later.append(r['extra'])])
+        assert later == [10, 20, 30]
+        assert [h['extra'] for h in history] == later
+
+    def test_stop_ends_early_and_checkpoints(self, cfg):
+        cfg = cfg.model_copy(update={'save_every': 100})
+        calls = []
+        trainer = DragonTrainer(make_model(cfg), sgd)
+        history = trainer.fit(batches(), epochs=5, callbacks=[
+            lambda m, r: r['epoch'] == 2,
+            lambda m, r: calls.append(r['epoch']),  # still runs on the stopping epoch
+        ])
+        assert [h['epoch'] for h in history] == [1, 2]
+        assert calls == [1, 2]
+        assert trainer.model.latest_checkpoint() == trainer.model.checkpoint_path(2)
+        assert trainer.history == history
+
+    def test_exception_propagates_without_checkpoint(self, cfg):
+        class Pruned(Exception):
+            pass
+
+        def prune(model, record):
+            if record['epoch'] == 2:
+                raise Pruned
+
+        model = make_model(cfg.model_copy(update={'save_every': 100}))
+        with pytest.raises(Pruned):
+            DragonTrainer(model, sgd).fit(batches(), epochs=5, callbacks=[prune])
+        assert model.epoch == 2
+        assert model.latest_checkpoint() is None
+
+
+class TestLRSchedule:
+    def test_records_lr_without_schedule(self, cfg):
+        history = DragonTrainer(make_model(cfg), sgd).fit(batches(), epochs=2)
+        assert [h['lr'] for h in history] == [0.1, 0.1]
+
+    def test_linear_schedule(self, cfg):
+        trainer = DragonTrainer(make_model(cfg), sgd, lr_schedule=linear_schedule(4, final_frac=0.25))
+        history = trainer.fit(batches(), epochs=3)
+        # lr used in epoch n+1 = 0.1 * max(0.25, 1 - n/4 * 0.75)
+        assert [h['lr'] for h in history] == pytest.approx([0.1, 0.08125, 0.0625])
+        assert trainer.optimizer.param_groups[0]['initial_lr'] == 0.1
+
+    def test_resume_continues_schedule(self, cfg):
+        sched = lambda r: 0.5 ** r['epoch']
+        DragonTrainer(make_model(cfg), sgd, lr_schedule=sched).fit(batches(), epochs=2)
+        resumed = DragonTrainer(make_model(cfg), sgd, DragonTrainerConfig(resume=True),
+                                lr_schedule=sched)
+        history = resumed.fit(batches(), epochs=1)
+        assert history[0]['epoch'] == 3 and history[0]['lr'] == pytest.approx(0.1 * 0.25)
+
+    def test_rejects_bad_multiplier(self, cfg):
+        trainer = DragonTrainer(make_model(cfg), sgd, lr_schedule=lambda r: -1.0)
+        with pytest.raises(ValueError, match='multiplier'):
+            trainer.fit(batches(), epochs=1)
+
+    def test_linear_schedule_validates(self):
+        with pytest.raises(ValueError):
+            linear_schedule(0)
+
+
+class TestRegisterState:
+    class Counter:
+        def __init__(self):
+            self.n = 0
+
+        def state_dict(self):
+            return {'n': self.n}
+
+        def load_state_dict(self, state):
+            self.n = state['n']
+
+    def test_round_trip_and_pending(self, cfg):
+        model = make_model(cfg)
+        counter = self.Counter()
+        counter.n = 5
+        model.register_state('counter', counter)
+        path = DragonTrainer(model, sgd).save_checkpoint()
+
+        loaded = make_model(cfg)
+        loaded.load_checkpoint(path)          # nothing registered yet: kept pending
+        late = self.Counter()
+        loaded.register_state('counter', late)
+        assert late.n == 5
+
+    def test_rejects_stateless(self, cfg):
+        with pytest.raises(TypeError):
+            make_model(cfg).register_state('x', object())
