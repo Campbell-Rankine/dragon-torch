@@ -1,6 +1,7 @@
 # dragon-torch
 
 [![Tests on main](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FCampbell-Rankine%2Fdragon-torch%2Fbadges%2Ftests.json)](https://github.com/Campbell-Rankine/dragon-torch/actions/workflows/tests.yml)
+[![PyPI version](https://img.shields.io/pypi/v/dragon-torch)](https://pypi.org/project/dragon-torch/)
 
 PyTorch Deep Learning Dev Modules
 
