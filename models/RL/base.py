@@ -1,11 +1,11 @@
 import math
 from collections import defaultdict
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 import numpy as np
 import torch
 from pydantic import Field
 from data.RL.collector import ActOutput
-from models.base import Batch, DataLike, DragonModel, DragonModelConfig
+from models.base import Batch, DataLike, DragonModel, DragonModelConfig, EpochCallback
 from modules.RL.heads import deterministic_action
 from modules.RL.policy import DragonPolicyModule, PolicyOutput
 
@@ -96,7 +96,8 @@ class DragonRLModel(DragonModel[PolicyOutput]):
         return float(np.mean(returns))
 
     def fit(self, train_data: DataLike, optimizer: torch.optim.Optimizer,
-            val_data: Optional[DataLike] = None, epochs: Optional[int] = None) -> list[dict[str, float]]:
+            val_data: Optional[DataLike] = None, epochs: Optional[int] = None,
+            callbacks: Sequence[EpochCallback] = ()) -> list[dict[str, float]]:
         # bind first so a checkpoint's source state (incl. global_step) is restored
         # before the remaining step budget is worked out
         self.bind(train_data, train=True)
@@ -107,4 +108,5 @@ class DragonRLModel(DragonModel[PolicyOutput]):
             epochs = math.ceil(remaining / train_data.steps_per_epoch)
             if epochs <= 0:
                 return []
-        return super().fit(train_data, optimizer, val_data=val_data, epochs=epochs)
+        return super().fit(train_data, optimizer, val_data=val_data, epochs=epochs,
+                           callbacks=callbacks)

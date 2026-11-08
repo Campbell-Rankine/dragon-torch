@@ -1,9 +1,9 @@
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Union
+from typing import Callable, Iterator, Optional, Sequence, Union
 import torch
 from pydantic import BaseModel, Field
 from common.types import PathLike
-from models.base import _DragonModel, DataLike
+from models.base import _DragonModel, DataLike, EpochCallback
 
 type OptimizerFactory = Callable[[Iterator[torch.nn.Parameter]], torch.optim.Optimizer]
 type OptimizerLike = Union[torch.optim.Optimizer, OptimizerFactory]
@@ -52,12 +52,15 @@ class DragonTrainer:
         return self.model.load_checkpoint(path, self.optimizer)
 
     def fit(self, train_data: DataLike, val_data: Optional[DataLike] = None,
-            epochs: Optional[int] = None) -> list[dict[str, float]]:
-        """Train for `epochs` more epochs (default cfg.epochs, then the model's own)."""
+            epochs: Optional[int] = None,
+            callbacks: Sequence[EpochCallback] = ()) -> list[dict[str, float]]:
+        """Train for `epochs` more epochs (default cfg.epochs, then the model's own).
+        `callbacks` run after every epoch; see models.base.EpochCallback."""
         if self._resume_pending:
             self.resume()
         history = self.model.fit(train_data, self.optimizer, val_data=val_data,
-                                 epochs=epochs if epochs is not None else self.config.epochs)
+                                 epochs=epochs if epochs is not None else self.config.epochs,
+                                 callbacks=callbacks)
         self.history.extend(history)
         return history
 

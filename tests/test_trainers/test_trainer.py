@@ -112,3 +112,51 @@ class TestDragonTrainer:
         source = CountingSource()
         DragonTrainer(make_model(cfg), sgd, DragonTrainerConfig(resume=True)).fit(source, epochs=1)
         assert source.served == 18  # 12 restored + 6 from the resumed epoch
+
+
+class TestEpochCallbacks:
+    def test_receives_every_record(self, cfg):
+        seen = []
+        trainer = DragonTrainer(make_model(cfg), sgd)
+        history = trainer.fit(batches(), val_data=batches(2, seed=1),
+                              callbacks=[lambda model, record: seen.append((model, dict(record)))])
+        assert [r for _, r in seen] == history
+        assert all(m is trainer.model for m, _ in seen)
+        assert 'val_loss' in seen[0][1]
+
+    def test_can_add_keys_for_later_callbacks(self, cfg):
+        def add(model, record):
+            record['extra'] = record['epoch'] * 10
+
+        later = []
+        history = DragonTrainer(make_model(cfg), sgd).fit(
+            batches(), callbacks=[add, lambda m, r: later.append(r['extra'])])
+        assert later == [10, 20, 30]
+        assert [h['extra'] for h in history] == later
+
+    def test_stop_ends_early_and_checkpoints(self, cfg):
+        cfg = cfg.model_copy(update={'save_every': 100})
+        calls = []
+        trainer = DragonTrainer(make_model(cfg), sgd)
+        history = trainer.fit(batches(), epochs=5, callbacks=[
+            lambda m, r: r['epoch'] == 2,
+            lambda m, r: calls.append(r['epoch']),  # still runs on the stopping epoch
+        ])
+        assert [h['epoch'] for h in history] == [1, 2]
+        assert calls == [1, 2]
+        assert trainer.model.latest_checkpoint() == trainer.model.checkpoint_path(2)
+        assert trainer.history == history
+
+    def test_exception_propagates_without_checkpoint(self, cfg):
+        class Pruned(Exception):
+            pass
+
+        def prune(model, record):
+            if record['epoch'] == 2:
+                raise Pruned
+
+        model = make_model(cfg.model_copy(update={'save_every': 100}))
+        with pytest.raises(Pruned):
+            DragonTrainer(model, sgd).fit(batches(), epochs=5, callbacks=[prune])
+        assert model.epoch == 2
+        assert model.latest_checkpoint() is None

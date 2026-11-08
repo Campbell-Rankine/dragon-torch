@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Generic, Callable, ClassVar, Any, Iterable, Iterator, Optional, Union
+from typing import Generic, Callable, ClassVar, Any, Iterable, Iterator, Optional, Protocol, Sequence, Union
 from abc import abstractmethod, ABC
 from torch.utils.data import DataLoader, IterableDataset
 from pathlib import Path
@@ -12,6 +12,19 @@ from loss import DragonLossFunction
 
 type Batch = Any
 type DataLike = Iterable[Batch]
+
+
+class EpochCallback(Protocol):
+    """Called by fit() after each epoch's history record is built.
+
+    `record` is the live dict that goes into history, so a callback may add keys
+    (e.g. an evaluation it ran) for later callbacks and the returned history.
+    Return True to stop training after this epoch (a checkpoint is still saved).
+    Exceptions propagate out of fit() unhandled, e.g. optuna.TrialPruned; no
+    checkpoint is written for that epoch.
+    """
+
+    def __call__(self, model: "_DragonModel", record: dict[str, float]) -> Optional[bool]: ...
 
 
 class _DragonModel(ABC, Generic[ModelDtype]):
@@ -75,7 +88,8 @@ class _DragonModel(ABC, Generic[ModelDtype]):
     @abstractmethod
     def fit(self, train_data: DataLike, optimizer: torch.optim.Optimizer,
             val_data: Optional[DataLike] = None,
-            epochs: Optional[int] = None) -> list[dict[str, float]]: ...
+            epochs: Optional[int] = None,
+            callbacks: Sequence[EpochCallback] = ()) -> list[dict[str, float]]: ...
 
     # ------- checkpoints ------- #
     @abstractmethod
@@ -264,9 +278,14 @@ class DragonModel(_DragonModel[ModelDtype]):
         return float(np.mean(losses))
 
     def fit(self, train_data: DataLike, optimizer: torch.optim.Optimizer,
-            val_data: Optional[DataLike] = None, epochs: Optional[int] = None) -> list[dict[str, float]]:
+            val_data: Optional[DataLike] = None, epochs: Optional[int] = None,
+            callbacks: Sequence[EpochCallback] = ()) -> list[dict[str, float]]:
         """Train for `epochs` (default cfg.max_epochs) more epochs, checkpointing
-        every cfg.save_every epochs and after the last one. Returns per-epoch history."""
+        every cfg.save_every epochs and after the last one. Returns per-epoch history.
+
+        `callbacks` run in order after each epoch (see EpochCallback); all of them
+        run even if an earlier one asks to stop, then training stops early with a
+        checkpoint."""
         epochs = self.config.max_epochs if epochs is None else epochs
         self.bind(train_data, train=True)
         history = []
@@ -287,8 +306,13 @@ class DragonModel(_DragonModel[ModelDtype]):
                 record.update({k: v for k, v in train_data.metrics().items()
                                if k not in record})
             history.append(record)
-            if self.epoch % self.config.save_every == 0 or len(history) == epochs:
+            stop = False
+            for callback in callbacks:
+                stop = bool(callback(self, record)) or stop
+            if stop or self.epoch % self.config.save_every == 0 or len(history) == epochs:
                 self.save_checkpoint(optimizer)
+            if stop:
+                break
         return history
 
     def epoch_metrics(self) -> dict[str, float]:

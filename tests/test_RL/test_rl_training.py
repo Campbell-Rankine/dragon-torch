@@ -61,6 +61,18 @@ class TestDragonRLModel:
         history = trainer.fit(source, val_data=EpisodeSource(cartpole(1), n_episodes=1), epochs=3)
         assert len(history) == 3 and 'val_return' in history[0] and 'approx_kl' not in history[0]
 
+    def test_callbacks_see_global_step_and_can_stop(self, tmp_path):
+        source = RolloutSource(cartpole(2), n_steps=10, n_minibatches=1)  # 20 steps / epoch
+        model = build(tmp_path, source, total_timesteps=200)
+        steps = []
+
+        def cb(m, record):
+            steps.append(record['global_step'])
+            return record['global_step'] >= 60
+
+        history = DragonTrainer(model, adam).fit(source, callbacks=[cb])
+        assert steps == [20, 40, 60] and len(history) == 3
+
     def test_continuous_actions(self, tmp_path):
         source = RolloutSource(DragonEnvConfig(env_id='Pendulum-v1', n_envs=2), n_steps=16)
         history = DragonTrainer(build(tmp_path, source), adam).fit(source, epochs=2)
