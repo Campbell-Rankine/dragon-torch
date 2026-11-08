@@ -27,6 +27,19 @@ uv run --extra test --extra torch-cpu --extra torch-ext pytest            # ever
 uv run --extra test --extra torch-cpu --extra torch-ext pytest -m "not network"  # skip Hugging Face Hub tests
 ```
 
+### Releases:
+
+When the tests pass on `main`, `tests.yml` starts `release.yml`. That workflow:
+
+1. Re-checks that the commit is on `main` and that its `test` job passed.
+2. Picks the next version with `scripts/release.py`.
+3. Builds the package and uploads it to PyPI.
+4. Tags the commit `vX.Y.Z`. A commit that already has a tag is never released twice.
+
+Each release bumps the patch number of the latest release, carrying over when a part reaches its cap. The caps are 10, 10 and 20, so `1.1.20` is followed by `1.2.0`, `1.10.20` by `2.0.0`, and `10.10.20` is the last possible version. The version in `pyproject.toml` acts as a floor: set it higher, for example to `2.0.0`, to jump straight to that version.
+
+Uploads use PyPI trusted publishing. Add a publisher for this repo on PyPI with workflow `release.yml` and environment `pypi`.
+
 ### Tuning / monitoring:
 
 `utils/tuning/` runs optuna studies over any `_DragonModel` (pruning, multi-objective, shared storage for parallel workers) and serves them in `optuna-dashboard`. `utils/tuning/RL.py` and `utils/tuning/presets/` tune any RL trainer with PPO / A2C search spaces; `scripts/tune_rl.py` runs a study worker. See [docs/tuning.md](docs/tuning.md).

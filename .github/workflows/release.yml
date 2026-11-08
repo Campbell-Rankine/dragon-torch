@@ -1,0 +1,107 @@
+name: Release
+
+# Builds dragon-torch and publishes it to PyPI with the next version number
+# (scripts/release.py: patch bump, each part capped at 10.10.20).
+#
+# Started by tests.yml after the tests pass on main. It's a separate workflow
+# because tests.yml cancels in-progress runs when a new push arrives, and an
+# upload must never be cancelled halfway. It can also be run by hand for a commit
+# on main; either way it re-checks that the commit's tests passed on main.
+#
+# One-time setup: on PyPI, add a trusted publisher for this repo with workflow
+# `release.yml` and environment `pypi` (a "pending publisher" before the first
+# upload), and create the `pypi` environment under the repo's settings.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit on main to release (its Tests run on main must have passed)
+        required: true
+
+# releases run one at a time and are never cancelled: each one reads the last
+# released version, so two at once could pick the same number
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: pypi
+    permissions:
+      contents: write # push the v* release tag
+      id-token: write # PyPI trusted publishing
+      actions: read # look up the commit's test runs
+    env:
+      SHA: ${{ inputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0 # tags: released versions + "already released" check
+
+      - name: Check the commit is releasable
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::${SHA::7} is not on main"; exit 1
+          fi
+          # check the `test` job, not the whole run: the run that dispatched this
+          # release is still in progress (its release job is what started us)
+          passed=false
+          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/tests.yml/runs?head_sha=$SHA&branch=main" \
+                         --jq '.workflow_runs[].id'); do
+            conclusion=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs" \
+                           --jq '.jobs[] | select(.name == "test") | .conclusion')
+            if [ "$conclusion" = "success" ]; then passed=true; break; fi
+          done
+          if [ "$passed" != "true" ]; then
+            echo "::error::no Tests run on main passed its test job for ${SHA::7}"; exit 1
+          fi
+          released=$(git tag --points-at "$SHA" --list 'v*')
+          if [ -n "$released" ]; then
+            echo "${SHA::7} is already released as $released, nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.skip == 'false'
+        with:
+          python-version: "3.13"
+
+      - name: Pick the next version
+        id: version
+        if: steps.gate.outputs.skip == 'false'
+        run: uv run --no-project python scripts/release.py next-version --write
+
+      - name: Build
+        if: steps.gate.outputs.skip == 'false'
+        run: uv build --out-dir dist
+
+      - name: Check the package
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          # refuse wheels that would install stray top-level packages (utils, tests, ...)
+          uv run --no-project python scripts/release.py check-wheel dist/*.whl
+          uvx twine check --strict dist/*
+
+      - name: Publish to PyPI
+        if: steps.gate.outputs.skip == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Tag the release
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" "$SHA" -m "dragon-torch $VERSION"
+          git push origin "v$VERSION"
+          echo "Released dragon-torch $VERSION (${SHA::7}): https://pypi.org/project/dragon-torch/$VERSION/" >> "$GITHUB_STEP_SUMMARY"
