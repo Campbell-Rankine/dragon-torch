@@ -20,16 +20,17 @@ class OptunaReporter:
 
     Epochs that didn't record `metric` (e.g. evaluation only every N steps) are
     skipped. A non-finite metric stops training instead of being reported; the
-    objective then marks the trial as failed. With `prune=False` (multi-objective
+    objective then marks the trial as failed. With `report=False` (multi-objective
     studies, where optuna has no trial.report) only that divergence check runs.
+    Whether a reported value prunes is up to the study's pruner (NopPruner: never).
     """
 
     def __init__(self, trial: optuna.Trial, metric: str, step_key: str = 'epoch',
-                 prune: bool = True):
+                 report: bool = True):
         self.trial = trial
         self.metric = metric
         self.step_key = step_key
-        self.prune = prune
+        self.report = report
 
     def __call__(self, model: _DragonModel, record: dict[str, float]) -> Optional[bool]:
         if self.metric not in record:
@@ -37,7 +38,7 @@ class OptunaReporter:
         value = record[self.metric]
         if not _is_finite(value):
             return True
-        if not self.prune:
+        if not self.report:
             return None
         if self.step_key not in record:
             raise KeyError(f"report step key '{self.step_key}' missing from history record, "

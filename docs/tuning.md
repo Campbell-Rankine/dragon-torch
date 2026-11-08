@@ -15,6 +15,8 @@ uv sync --extra tune   # adds optuna-dashboard; optuna itself is a core dependen
 | `reporting.py` | Epoch callbacks: `OptunaReporter` (`trial.report` and pruning) and `JsonlLogger` (every epoch record goes to `history.jsonl`) |
 | `study.py` | `run_study`, `create_study`, `load_study`, `best_summary` |
 | `monitor.py` | CLI with `summary`, `export` (CSV) and `dashboard` |
+| `RL.py` | `StepEvalCallback`, `DivergenceGuard` / `TrialDiverged`, `rl_tune_config`. Needs the `RL` extra |
+| `presets/ppo.py` | `PPOSpace` (search space) and `PPOBuilder` (builds a trial). Needs the `RL` extra |
 
 The tuner relies on the epoch-callback hook in `DragonModel.fit` / `DragonTrainer.fit` (`models.base.EpochCallback`). After each epoch, the hook gets the model and that epoch's history record. A callback can:
 
@@ -77,7 +79,7 @@ When a worker finishes, it writes `run_dir/<study_name>/best.json`. For a single
 | A metric becomes NaN or inf | Training stops and the trial is `FAIL`. The study carries on |
 | Misconfiguration, e.g. the metric is never recorded | Raises, and the study stops |
 
-Anything in the `TrialSpec` that has a `close()` method (train data, val data, `resources`) is closed when the trial ends, however it ends.
+Anything in the `TrialSpec` that has a `close()` method (train data, val data, `resources`, `callbacks`) is closed when the trial ends, however it ends. A pruned trial's reason is saved in the `prune_reason` user attribute.
 
 ### Custom metrics
 
@@ -93,6 +95,79 @@ TuneConfig(study_name='tradeoff', metrics=['val_return', 'steps_per_sec'],
 The objective returns a tuple, and `best.json` and the `summary` command show the Pareto front.
 
 Optuna can't prune multi-objective studies, because `trial.report` isn't supported there. The reporter therefore only runs its NaN/inf check, and the pruner is ignored. `cmaes` supports single-objective studies only.
+
+## RL training runs
+
+`utils.tuning.RL` and `utils.tuning.presets` specialise the base tuner for `DragonRLModel`. To run a PPO study directly:
+
+```bash
+uv run --extra RL --extra torch-cpu python scripts/tune_ppo.py --env CartPole-v1 \
+    --storage journal:runs/optuna.log --timesteps 100000 --eval-every 10000 --n-trials 20
+```
+
+You can run that command in several terminals at once; every worker joins the same study. In code:
+
+```python
+from data.envs import DragonEnvConfig
+from utils.tuning import run_study
+from utils.tuning.presets import PPOBuilder, PPOSpace
+from utils.tuning.RL import rl_tune_config
+
+cfg = rl_tune_config('ppo-cartpole', storage='journal:runs/optuna.log',
+                     n_trials=20, n_warmup_steps=20_000)          # warmup in env steps
+build = PPOBuilder(env=DragonEnvConfig(env_id='CartPole-v1', n_envs=8),
+                   total_timesteps=100_000, eval_every_steps=10_000,
+                   eval_episodes=10, smooth_window=3)
+run_study(cfg, PPOSpace(fixed={'gamma': 0.99}).suggest, build)
+```
+
+### Evaluation and objective
+
+`StepEvalCallback` runs `model.evaluate(EpisodeSource)` every `eval_every_steps` env steps, and once more when `total_timesteps` is reached. Each evaluation adds three values to that epoch's record:
+
+| Key | Value |
+|---|---|
+| `val_return` | Mean return over this evaluation's episodes (raw) |
+| `val_return_smooth` | Mean of the last `smooth_window` evaluations |
+| `eval_step` | The scheduled step this evaluation stands for: a multiple of `eval_every_steps`, capped at `total_timesteps` |
+
+`rl_tune_config` sets the objective to the final `val_return_smooth` (maximised) and reports it to the pruner at `eval_step`.
+
+The pruner compares trials at the **same reported step**, which is why it uses `eval_step`. An epoch is `n_envs × n_steps` env steps, and `n_steps` is a hyperparameter, so `global_step` values differ from trial to trial and would never match. The scheduled steps are the same for every trial.
+
+Set `eval_every_steps` to at least the largest epoch in the search space. An epoch that crosses two thresholds evaluates only once, and that trial skips a scheduled step.
+
+Every trial uses the same env and init seeds, so differences come from the hyperparameters rather than luck. The eval env defaults to the training env with one sub-env and `seed + 10_000`. If scores are still noisy, raise `eval_episodes` or `smooth_window`.
+
+### Divergence guard
+
+`DivergenceGuard` raises `TrialDiverged`, a subclass of `TrialPruned`, so a run that has blown up is stopped instead of using up its budget. This works in multi-objective studies too. The guard triggers on any of:
+
+- a NaN or inf `train_loss`, `policy_loss` or `value_loss`
+- `approx_kl > max_kl` for `patience` epochs in a row
+- `entropy < min_entropy` after `entropy_after_steps` env steps (optional)
+
+The guard only checks keys that the record contains, so it also works with A2C, which records no KL.
+
+### PPO search space
+
+`PPOSpace` covers these parameters:
+
+- `lr` and `ent_coef` (log scale)
+- `n_steps`, `n_minibatches`, `update_epochs`
+- `gamma`, `gae_lambda`, `clip_coef`, `vf_coef`, `max_grad_norm`
+- `hidden` (for example `'64x64'`)
+- `normalize_obs`
+
+To narrow the space, override any field. To pin a parameter, use `fixed={...}`; a pinned parameter isn't sampled. The choices are powers of two, so `n_steps × n_envs` always divides evenly into minibatches.
+
+Everything a trial records is in its `history.jsonl`: `episode_return`, `approx_kl`, `clip_frac`, `entropy`, `policy_loss`, `value_loss`, `steps_per_sec` and `global_step`.
+
+For multi-objective studies, for example return versus throughput:
+
+```python
+rl_tune_config('ppo-mo', extra_metrics={'steps_per_sec': 'maximize'})   # or: scripts/tune_ppo.py --multi-objective
+```
 
 ## Storage and workers
 

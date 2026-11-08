@@ -20,7 +20,8 @@ class TrialSpec:
 
     `callbacks` run before the tuner's own (logger, reporter), so they can add
     metrics to the record, e.g. an evaluation that runs every N steps.
-    Anything here with a `close()` method is closed when the trial ends.
+    Anything here with a `close()` method (data, resources, callbacks) is
+    closed when the trial ends.
     """
     model: _DragonModel
     optimizer: OptimizerLike
@@ -84,7 +85,7 @@ class DragonObjective:
         return [
             JsonlLogger(trial_dir / HISTORY_FILE),
             OptunaReporter(trial, self.cfg.metrics[0], step_key=self.cfg.report_key,
-                           prune=self.cfg.can_prune),
+                           report=not self.cfg.multi_objective),
         ]
 
     def __call__(self, trial: optuna.Trial) -> Union[float, tuple[float, ...]]:
@@ -97,15 +98,19 @@ class DragonObjective:
         spec = self.build(params, trial_dir)
         try:
             trainer = DragonTrainer(spec.model, spec.optimizer, spec.trainer_config)
-            history = trainer.fit(spec.train_data, spec.val_data, epochs=spec.epochs,
-                                  callbacks=[*spec.callbacks, *self.callbacks(trial, trial_dir)])
+            try:
+                history = trainer.fit(spec.train_data, spec.val_data, epochs=spec.epochs,
+                                      callbacks=[*spec.callbacks, *self.callbacks(trial, trial_dir)])
+            except optuna.TrialPruned as e:
+                trial.set_user_attr('prune_reason', str(e))  # shown in the dashboard
+                raise
             if not history:
                 raise ValueError("training produced no epochs")
             trial.set_user_attr('epochs', len(history))
             trial.set_user_attr('last_record', {k: float(v) for k, v in history[-1].items()})
             values = objective_values(history, self.cfg)
         finally:
-            for obj in (spec.train_data, spec.val_data, *spec.resources):
+            for obj in (spec.train_data, spec.val_data, *spec.resources, *spec.callbacks):
                 close = getattr(obj, 'close', None)
                 if callable(close):
                     close()

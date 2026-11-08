@@ -188,7 +188,7 @@ class TestOptunaReporter:
         assert trial.storage.get_trial(trial._trial_id).intermediate_values == {20: 5.0}
 
     def test_stops_on_non_finite(self):
-        reporter = OptunaReporter(optuna.create_study().ask(), 'm', prune=False)
+        reporter = OptunaReporter(optuna.create_study().ask(), 'm', report=False)
         assert reporter(None, {'epoch': 1, 'm': math.inf}) is True
         assert reporter(None, {'epoch': 1, 'm': 1.0}) is None
 

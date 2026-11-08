@@ -29,7 +29,7 @@ uv run --extra test --extra torch-cpu --extra torch-ext pytest -m "not network" 
 
 ### Tuning / monitoring:
 
-`utils/tuning/` runs optuna studies over any `_DragonModel` (pruning, multi-objective, shared storage for parallel workers) and serves them in `optuna-dashboard`. See [docs/tuning.md](docs/tuning.md).
+`utils/tuning/` runs optuna studies over any `_DragonModel` (pruning, multi-objective, shared storage for parallel workers) and serves them in `optuna-dashboard`. `utils/tuning/RL.py` and `utils/tuning/presets/` add step-scheduled evaluation, a divergence guard and a PPO search space; `scripts/tune_ppo.py` runs a study worker. See [docs/tuning.md](docs/tuning.md).
 
 ```bash
 uv sync --extra tune
@@ -39,7 +39,7 @@ python -m utils.tuning.monitor dashboard --storage sqlite:///runs/optuna.db
 ### TODO:
 
 - [ ] : Setup Lazy Loading for hugging face sources.
-- [ ] : Set up monitoring / experimentation with optuna
+- [x] : Set up monitoring / experimentation with optuna
 - [ ] : Implement off policy algorithms / dependencies.
 - [ ] : Test Accelerate.prepare works with loaders
 - [ ] : Test Accelerate.prepare works with gyms
