@@ -1,11 +1,11 @@
 import pytest
 import torch
 from datasets import Dataset
-from data.datasets.dragon import _Dataset
-from data.datasets.hugging_face.semasia.config import extract_semasia_dataset
-from data.datasets.hugging_face.semasia.semasia_celeba import (
+from dragon_torch.data.datasets.dragon import _Dataset
+from dragon_torch.data.datasets.hugging_face.semasia.config import extract_semasia_dataset
+from dragon_torch.data.datasets.hugging_face.semasia.semasia_celeba import (
     SemasiaCeleba, SemasiaCelebaSingleModel, SemasiaCelebaSourceConfig)
-from data.sources.hf import HuggingFaceSource
+from dragon_torch.data.sources.hf import HuggingFaceSource
 from tests.conftest import SEMASIA_CELEBA_REPO, SEMASIA_CELEBA_MODEL, SEMASIA_CELEBA_EMBED_DIM
 
 

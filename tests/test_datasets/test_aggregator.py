@@ -1,7 +1,7 @@
 import pytest
 from datasets import Dataset
 from torch.utils.data import DataLoader, IterableDataset
-from data.datasets.aggregator import Aggregator
+from dragon_torch.data.datasets.aggregator import Aggregator
 
 
 class ListDataset:

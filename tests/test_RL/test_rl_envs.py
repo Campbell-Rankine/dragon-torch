@@ -4,9 +4,9 @@ import pytest
 import torch
 from gymnasium import spaces
 from pydantic import ValidationError
-from data.envs import (Discretizer, DragonEnvConfig, RunningMeanStd, action_to_env, make_env_fn, make_vec_env,
+from dragon_torch.data.envs import (Discretizer, DragonEnvConfig, RunningMeanStd, action_to_env, make_env_fn, make_vec_env,
                        obs_to_tensor, register_dragon_env, validate_env)
-from modules.RL import FlattenObs, deterministic_action, make_dist_head
+from dragon_torch.modules.RL import FlattenObs, deterministic_action, make_dist_head
 
 B = 5
 

@@ -2,9 +2,9 @@ import pytest
 import requests
 from datasets import IterableDataset
 from pydantic import ValidationError
-from common.defaults import identity
-from data.sources.base import Source, source_factory
-from data.sources.hf import HuggingFaceSource, HFSourceConfig
+from dragon_torch.common.defaults import identity
+from dragon_torch.data.sources.base import Source, source_factory
+from dragon_torch.data.sources.hf import HuggingFaceSource, HFSourceConfig
 from tests.conftest import SEMASIA_CELEBA_REPO, SEMASIA_CELEBA_MODEL, SEMASIA_CELEBA_EMBED_DIM
 
 

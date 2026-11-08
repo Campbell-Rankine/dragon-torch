@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 from pydantic import ValidationError
-from data.sources.base import Source, source_factory
-from data.sources.disk import FileSource, FileSourceConfig
-from utils import gen_random_file_source
+from dragon_torch.data.sources.base import Source, source_factory
+from dragon_torch.data.sources.disk import FileSource, FileSourceConfig
+from dragon_torch.utils import gen_random_file_source
 
 blob_shape = (4, 10, 2)  # BATCH_SIZE, XDim, YDim
 

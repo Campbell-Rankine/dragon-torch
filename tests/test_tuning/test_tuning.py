@@ -4,14 +4,14 @@ import math
 import optuna
 import pytest
 import torch
-from models.base import DragonModel, DragonModelConfig
-from models.RL import DragonRLModel
-from modules import DragonModule
-from utils.tuning import (DragonObjective, OptunaReporter, TrialSpec, TuneConfig, make_storage,
+from dragon_torch.models.base import DragonModel, DragonModelConfig
+from dragon_torch.models.RL import DragonRLModel
+from dragon_torch.modules import DragonModule
+from dragon_torch.utils.tuning import (DragonObjective, OptunaReporter, TrialSpec, TuneConfig, make_storage,
                           read_history, run_study)
-from utils.tuning.config import JournalStorage
-from utils.tuning.monitor import export_csv, main, summarize, trial_rows
-from utils.tuning.objective import final_value
+from dragon_torch.utils.tuning.config import JournalStorage
+from dragon_torch.utils.tuning.monitor import export_csv, main, summarize, trial_rows
+from dragon_torch.utils.tuning.objective import final_value
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 IN_DIM = 3

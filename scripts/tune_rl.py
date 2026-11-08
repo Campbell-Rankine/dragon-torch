@@ -5,7 +5,7 @@
         --env CartPole-v1 --storage journal:runs/optuna.log \
         --timesteps 100000 --eval-every 10000 --n-trials 20
 
-    uv run --extra tune python -m utils.tuning.monitor dashboard --storage journal:runs/optuna.log
+    uv run --extra tune python -m dragon_torch.utils.tuning.monitor dashboard --storage journal:runs/optuna.log
 
 Each trial dir (runs/<study>/trial_NNNN) holds history.jsonl, config.json and
 checkpoints; rebuild the best run with
@@ -19,12 +19,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root, when run as a script
 
 import torch
-from data.envs import DragonEnvConfig
-from models.RL import DragonRLConfig
-from trainers.RL import (A2CTrainer, A2CTrainerConfig, EvalConfig, PPOTrainer, PPOTrainerConfig)
-from utils.tuning import run_study
-from utils.tuning.presets import a2c_space, ppo_space
-from utils.tuning.RL import RLTrialBuilder, rl_tune_config
+from dragon_torch.data.envs import DragonEnvConfig
+from dragon_torch.models.RL import DragonRLConfig
+from dragon_torch.trainers.RL import (A2CTrainer, A2CTrainerConfig, EvalConfig, PPOTrainer, PPOTrainerConfig)
+from dragon_torch.utils.tuning import run_study
+from dragon_torch.utils.tuning.presets import a2c_space, ppo_space
+from dragon_torch.utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
 ALGOS = {
     'ppo': (PPOTrainer, PPOTrainerConfig, ppo_space),

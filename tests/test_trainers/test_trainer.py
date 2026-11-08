@@ -1,8 +1,8 @@
 import pytest
 import torch
-from models.base import DragonModel, DragonModelConfig
-from modules import DragonModule
-from trainers import DragonTrainer, DragonTrainerConfig, linear_schedule
+from dragon_torch.models.base import DragonModel, DragonModelConfig
+from dragon_torch.modules import DragonModule
+from dragon_torch.trainers import DragonTrainer, DragonTrainerConfig, linear_schedule
 
 IN_DIM = 3
 TRUE_W = torch.tensor([[1.5], [-2.0], [0.5]])

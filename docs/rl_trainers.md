@@ -1,11 +1,11 @@
 # RL trainers
 
-`trainers/RL/` builds a complete on-policy RL run from a single config. That covers the rollout source, the evaluator, the policy network, the loss, the model, the optimizer, LR annealing, and the default callbacks.
+`dragon_torch/trainers/RL/` builds a complete on-policy RL run from a single config. That covers the rollout source, the evaluator, the policy network, the loss, the model, the optimizer, LR annealing, and the default callbacks.
 
 ```python
-from data.envs import DragonEnvConfig
-from models.RL import DragonRLConfig
-from trainers.RL import EvalConfig, OptimConfig, PPOTrainer, PPOTrainerConfig
+from dragon_torch.data.envs import DragonEnvConfig
+from dragon_torch.models.RL import DragonRLConfig
+from dragon_torch.trainers.RL import EvalConfig, OptimConfig, PPOTrainer, PPOTrainerConfig
 
 cfg = PPOTrainerConfig(
     env=DragonEnvConfig(env_id='CartPole-v1', n_envs=4),
@@ -18,17 +18,17 @@ with PPOTrainer(cfg) as trainer:      # closes the envs on exit
     score = trainer.evaluate()        # mean return on its own evaluator
 ```
 
-Import from `trainers.RL`. The plain `trainers` package doesn't import it, so supervised code doesn't need the `RL` extra.
+Import from `dragon_torch.trainers.RL`. The plain `trainers` package doesn't import it, so supervised code doesn't need the `RL` extra.
 
 ## Layout
 
 | File | Contents |
 |---|---|
-| `trainers/RL/config.py` | `DragonRLTrainerConfig` and its sections, plus `apply_overrides` |
-| `trainers/RL/callbacks.py` | `StepEvalCallback`, `DivergenceGuard` and `EVAL_STEP_KEY` (`TrainingDiverged` itself is in `trainers/base.py`) |
-| `trainers/RL/trainer.py` | `DragonRLTrainer`, the abstract base class |
-| `trainers/RL/PPO/` | `PPOLossConfig`, `PPOTrainerConfig`, `PPOTrainer` |
-| `trainers/RL/A2C/` | `A2CLossConfig`, `A2CTrainerConfig`, `A2CTrainer` |
+| `dragon_torch/trainers/RL/config.py` | `DragonRLTrainerConfig` and its sections, plus `apply_overrides` |
+| `dragon_torch/trainers/RL/callbacks.py` | `StepEvalCallback`, `DivergenceGuard` and `EVAL_STEP_KEY` (`TrainingDiverged` itself is in `dragon_torch/trainers/base.py`) |
+| `dragon_torch/trainers/RL/trainer.py` | `DragonRLTrainer`, the abstract base class |
+| `dragon_torch/trainers/RL/PPO/` | `PPOLossConfig`, `PPOTrainerConfig`, `PPOTrainer` |
+| `dragon_torch/trainers/RL/A2C/` | `A2CLossConfig`, `A2CTrainerConfig`, `A2CTrainer` |
 
 ## Config
 
@@ -97,7 +97,7 @@ class MyAlgoTrainer(DragonRLTrainer):
 
 **Default tuning objective**
 
-`objectives = {'val_return_smooth': 'maximize'}` is the default tuning objective, which `utils.tuning.RL.rl_tune_config` reads. Objectives are a tuning choice, not a training one, so there are no separate single- and multi-objective trainers. The history contains every metric, and `TuneConfig` decides which ones to optimise.
+`objectives = {'val_return_smooth': 'maximize'}` is the default tuning objective, which `dragon_torch.utils.tuning.RL.rl_tune_config` reads. Objectives are a tuning choice, not a training one, so there are no separate single- and multi-objective trainers. The history contains every metric, and `TuneConfig` decides which ones to optimise.
 
 ## Evaluation
 
@@ -121,7 +121,7 @@ The schedule is a function of the record rather than a stateful torch scheduler.
 
 ## Divergence guard
 
-`DivergenceGuard` raises `trainers.TrainingDiverged` on any of:
+`DivergenceGuard` raises `dragon_torch.trainers.TrainingDiverged` on any of:
 
 - a NaN or inf `train_loss`, `policy_loss` or `value_loss`
 - `approx_kl > max_kl` for `kl_patience` epochs in a row

@@ -3,12 +3,12 @@ import pytest
 import torch
 from pydantic import ValidationError
 from torch.utils.data import DataLoader
-from data.datasets.aggregator import Aggregator
-from data.datasets.dragon import DragonDataset
-from data.sources.disk import FileSourceConfig
-from loss import DragonLossFunction
-from models.base import _DragonModel, DragonModel, DragonModelConfig, model_factory
-from modules import DragonModule
+from dragon_torch.data.datasets.aggregator import Aggregator
+from dragon_torch.data.datasets.dragon import DragonDataset
+from dragon_torch.data.sources.disk import FileSourceConfig
+from dragon_torch.loss import DragonLossFunction
+from dragon_torch.models.base import _DragonModel, DragonModel, DragonModelConfig, model_factory
+from dragon_torch.modules import DragonModule
 
 IN_DIM, OUT_DIM, BATCH, N_BATCHES = 3, 1, 8, 6
 TRUE_W = torch.tensor([[1.5], [-2.0], [0.5]])

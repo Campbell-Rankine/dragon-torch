@@ -3,8 +3,8 @@ import numpy as np
 import pytest
 import torch
 from gymnasium import spaces
-from data.envs import DragonEnvConfig
-from data.RL import ActOutput, EnvCollector, EpisodeSource, RolloutSource, compute_gae
+from dragon_torch.data.envs import DragonEnvConfig
+from dragon_torch.data.RL import ActOutput, EnvCollector, EpisodeSource, RolloutSource, compute_gae
 
 
 class CounterEnv(gym.Env):

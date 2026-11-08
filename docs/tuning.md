@@ -1,6 +1,6 @@
 # Tuning and monitoring with Optuna
 
-`utils/tuning/` runs Optuna studies over any `_DragonModel`. Each trial builds a model from sampled hyperparameters, trains it with `DragonTrainer`, and reports per-epoch metrics so weak trials are pruned early. You can watch studies in `optuna-dashboard` or from the CLI.
+`dragon_torch/utils/tuning/` runs Optuna studies over any `_DragonModel`. Each trial builds a model from sampled hyperparameters, trains it with `DragonTrainer`, and reports per-epoch metrics so weak trials are pruned early. You can watch studies in `optuna-dashboard` or from the CLI.
 
 ```bash
 uv sync --extra tune   # adds optuna-dashboard; optuna itself is a core dependency
@@ -19,7 +19,7 @@ uv sync --extra tune   # adds optuna-dashboard; optuna itself is a core dependen
 | `RL.py` | `rl_tune_config` and `RLTrialBuilder`, for any `DragonRLTrainer`. Needs the `RL` extra |
 | `presets/` | `ppo_space()` and `a2c_space()`: search spaces over the PPO and A2C trainer configs |
 
-The tuner relies on the epoch-callback hook in `DragonModel.fit` / `DragonTrainer.fit` (`models.base.EpochCallback`). After each epoch, the hook gets the model and that epoch's history record. A callback can:
+The tuner relies on the epoch-callback hook in `DragonModel.fit` / `DragonTrainer.fit` (`dragon_torch.models.base.EpochCallback`). After each epoch, the hook gets the model and that epoch's history record. A callback can:
 
 - add keys to the record,
 - return `True` to stop early (a checkpoint is still saved),
@@ -34,8 +34,8 @@ You provide two functions:
 
 ```python
 import torch
-from models.base import DragonModel, DragonModelConfig
-from utils.tuning import TrialSpec, TuneConfig, run_study
+from dragon_torch.models.base import DragonModel, DragonModelConfig
+from dragon_torch.utils.tuning import TrialSpec, TuneConfig, run_study
 
 def suggest(trial):
     return {'lr': trial.suggest_float('lr', 1e-4, 1e-1, log=True),
@@ -109,12 +109,12 @@ uv run --extra RL --extra torch-cpu python scripts/tune_rl.py --algo ppo --env C
 You can run that command in several terminals at once; every worker joins the same study. Use `--algo a2c` for A2C. In code:
 
 ```python
-from data.envs import DragonEnvConfig
-from models.RL import DragonRLConfig
-from trainers.RL import EvalConfig, PPOTrainer, PPOTrainerConfig
-from utils.tuning import run_study
-from utils.tuning.presets import ppo_space
-from utils.tuning.RL import RLTrialBuilder, rl_tune_config
+from dragon_torch.data.envs import DragonEnvConfig
+from dragon_torch.models.RL import DragonRLConfig
+from dragon_torch.trainers.RL import EvalConfig, PPOTrainer, PPOTrainerConfig
+from dragon_torch.utils.tuning import run_study
+from dragon_torch.utils.tuning.presets import ppo_space
+from dragon_torch.utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
 base = PPOTrainerConfig(
     env=DragonEnvConfig(env_id='CartPole-v1', n_envs=8),
@@ -203,12 +203,12 @@ Notes for parallel workers:
 ## Monitoring
 
 ```bash
-python -m utils.tuning.monitor dashboard --storage sqlite:///runs/optuna.db            # http://127.0.0.1:8080
-python -m utils.tuning.monitor summary   --storage sqlite:///runs/optuna.db            # list studies
-python -m utils.tuning.monitor summary   --storage sqlite:///runs/optuna.db --study mlp-sweep
-python -m utils.tuning.monitor export    --storage sqlite:///runs/optuna.db --study mlp-sweep --out trials.csv
+dragon-tune dashboard --storage sqlite:///runs/optuna.db            # http://127.0.0.1:8080
+dragon-tune summary   --storage sqlite:///runs/optuna.db            # list studies
+dragon-tune summary   --storage sqlite:///runs/optuna.db --study mlp-sweep
+dragon-tune export    --storage sqlite:///runs/optuna.db --study mlp-sweep --out trials.csv
 ```
 
 - **Dashboard:** shows intermediate values (the curve of the reported metric), parameter importance, slice and contour plots, and user attributes.
-- **Other metrics:** curves for metrics other than the reported one are in each trial's `history.jsonl`. Load one with `utils.tuning.read_history`.
+- **Other metrics:** curves for metrics other than the reported one are in each trial's `history.jsonl`. Load one with `dragon_torch.utils.tuning.read_history`.
 - **Remote access:** to reach the dashboard from another machine, pass `--host 0.0.0.0`, or tunnel the port over SSH.

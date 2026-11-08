@@ -17,7 +17,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["dragon_torch"]
+
+[project.scripts]
+dragon-tune = "dragon_torch.utils.tuning.monitor:main"
 
 [project.optional-dependencies]
 

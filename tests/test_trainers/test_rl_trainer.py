@@ -3,11 +3,11 @@ import math
 import warnings
 import pytest
 import torch
-from data.envs import DragonEnvConfig
-from models.RL import DragonRLConfig
-from modules.RL import ActorCritic
-from trainers import TrainingDiverged
-from trainers.RL import (EVAL_STEP_KEY, A2CTrainer, A2CTrainerConfig, DivergenceGuard,
+from dragon_torch.data.envs import DragonEnvConfig
+from dragon_torch.models.RL import DragonRLConfig
+from dragon_torch.modules.RL import ActorCritic
+from dragon_torch.trainers import TrainingDiverged
+from dragon_torch.trainers.RL import (EVAL_STEP_KEY, A2CTrainer, A2CTrainerConfig, DivergenceGuard,
                          DragonRLTrainer, EvalConfig, GuardConfig, OptimConfig, PPOTrainer,
                          PPOTrainerConfig, RolloutConfig, StepEvalCallback, apply_overrides)
 

@@ -1,12 +1,12 @@
 import pytest
 import torch
-from data.envs import DragonEnvConfig
-from data.RL import EpisodeSource, RolloutSource
-from loss.RL import A2CLoss, PPOLoss
-from models.base import _DragonModel, model_factory
-from models.RL import DragonRLConfig, DragonRLModel
-from modules.RL import ActorCritic, PolicyOutput
-from trainers import DragonTrainer, DragonTrainerConfig
+from dragon_torch.data.envs import DragonEnvConfig
+from dragon_torch.data.RL import EpisodeSource, RolloutSource
+from dragon_torch.loss.RL import A2CLoss, PPOLoss
+from dragon_torch.models.base import _DragonModel, model_factory
+from dragon_torch.models.RL import DragonRLConfig, DragonRLModel
+from dragon_torch.modules.RL import ActorCritic, PolicyOutput
+from dragon_torch.trainers import DragonTrainer, DragonTrainerConfig
 
 
 def cartpole(n_envs=4, seed=0):
@@ -116,8 +116,8 @@ class TestDragonRLModel:
 class TestSB3Adapter:
     def test_dragon_module_as_features_extractor(self):
         sb3 = pytest.importorskip('stable_baselines3')
-        from modules.base import DragonModule
-        from modules.external.sb3 import DragonFeaturesExtractor, sb3_policy_kwargs
+        from dragon_torch.modules.base import DragonModule
+        from dragon_torch.modules.external.sb3 import DragonFeaturesExtractor, sb3_policy_kwargs
 
         class Encoder(DragonModule):
             kind = 'test-sb3-encoder'

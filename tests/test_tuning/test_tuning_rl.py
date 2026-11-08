@@ -1,14 +1,14 @@
 import json
 import optuna
 import pytest
-from data.envs import DragonEnvConfig
-from models.RL import DragonRLConfig
-from trainers.RL import (EVAL_STEP_KEY, A2CTrainer, A2CTrainerConfig, EvalConfig, GuardConfig,
+from dragon_torch.data.envs import DragonEnvConfig
+from dragon_torch.models.RL import DragonRLConfig
+from dragon_torch.trainers.RL import (EVAL_STEP_KEY, A2CTrainer, A2CTrainerConfig, EvalConfig, GuardConfig,
                          OptimConfig, PPOTrainer, PPOTrainerConfig)
-from utils.tuning import (CategoricalParam, DragonObjective, FloatParam, IntParam, SearchSpace,
+from dragon_torch.utils.tuning import (CategoricalParam, DragonObjective, FloatParam, IntParam, SearchSpace,
                           TrialSpec, read_history, run_study)
-from utils.tuning.presets import a2c_space, ppo_space
-from utils.tuning.RL import RLTrialBuilder, rl_tune_config
+from dragon_torch.utils.tuning.presets import a2c_space, ppo_space
+from dragon_torch.utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 COMPLETE, PRUNED = optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED
