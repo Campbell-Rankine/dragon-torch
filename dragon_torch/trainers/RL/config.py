@@ -159,28 +159,68 @@ class DragonRLTrainerConfig(DragonTrainerConfig):
 ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
 
-def apply_overrides(cfg: ConfigT, params: Mapping[str, Any], _prefix: str = '') -> ConfigT:
-    """A copy of `cfg` with dotted-path fields replaced, re-validated at every
-    level that changed (so cross-field validators still run). Unknown keys raise."""
+def apply_overrides(cfg: ConfigT, params: Mapping[str, Any]) -> ConfigT:
+    """A copy of `cfg` with dotted-path values replaced. Paths walk config
+    sections, list items by index and dict entries by key, e.g.
+        {'rollout.n_steps': 256, 'env.wrappers.0.kwargs.cost': 0.05}
+    Every config section on a changed path is re-validated (so cross-field
+    validators run). Unknown fields, out-of-range indices and missing
+    intermediate dict keys raise KeyError; a dict's last key may be new (so a
+    wrapper kwarg with a default can be tuned). Nothing is modified in place."""
+    if not isinstance(cfg, BaseModel):
+        raise TypeError(f"apply_overrides needs a pydantic config, got {type(cfg).__name__}")
+    return _override(cfg, dict(params), '')
+
+
+def _split(params: dict[str, Any], prefix: str) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Group dotted paths by their first part: (whole replacements, nested)."""
     direct: dict[str, Any] = {}
     nested: dict[str, dict[str, Any]] = {}
-    fields = type(cfg).model_fields
     for key, value in params.items():
         head, _, rest = key.partition('.')
-        if head not in fields:
-            raise KeyError(f"unknown config key '{_prefix}{key}' for {type(cfg).__name__} "
-                           f"(fields: {sorted(fields)})")
         if rest:
             nested.setdefault(head, {})[rest] = value
         else:
             direct[head] = value
-    updates = dict(direct)
-    for head, sub in nested.items():
-        if head in direct:
-            raise ValueError(f"'{_prefix}{head}' is overridden both whole and by field")
-        current = getattr(cfg, head)
-        if not isinstance(current, BaseModel):
-            raise KeyError(f"can't set '{_prefix}{head}.{next(iter(sub))}': "
-                           f"'{_prefix}{head}' is {type(current).__name__}, not a config section")
-        updates[head] = apply_overrides(current, sub, f"{_prefix}{head}.")
-    return type(cfg).model_validate({**dict(cfg), **updates})
+    for head in direct.keys() & nested.keys():
+        raise ValueError(f"'{prefix}{head}' is overridden both whole and by field")
+    return direct, nested
+
+
+def _override(obj: Any, params: dict[str, Any], prefix: str) -> Any:
+    direct, nested = _split(params, prefix)
+
+    if isinstance(obj, BaseModel):
+        fields = type(obj).model_fields
+        for head in (*direct, *nested):
+            if head not in fields:
+                raise KeyError(f"unknown config key '{prefix}{head}' for {type(obj).__name__} "
+                               f"(fields: {sorted(fields)})")
+        updates = dict(direct)
+        for head, sub in nested.items():
+            updates[head] = _override(getattr(obj, head), sub, f"{prefix}{head}.")
+        return type(obj).model_validate({**dict(obj), **updates})
+
+    if isinstance(obj, (list, tuple)):
+        items = list(obj)
+        for head, value in (*direct.items(), *((h, None) for h in nested)):
+            if not head.lstrip('-').isdigit() or not -len(items) <= int(head) < len(items):
+                raise KeyError(f"'{prefix}{head}': no item {head!r} in a list of {len(items)}")
+        for head, value in direct.items():
+            items[int(head)] = value
+        for head, sub in nested.items():
+            items[int(head)] = _override(items[int(head)], sub, f"{prefix}{head}.")
+        return type(obj)(items)
+
+    if isinstance(obj, dict):
+        out = {**obj, **direct}
+        for head, sub in nested.items():
+            if head not in obj:
+                raise KeyError(f"'{prefix}{head}' not found (keys: {sorted(obj)})")
+            out[head] = _override(obj[head], sub, f"{prefix}{head}.")
+        return out
+
+    head = next(iter(params))
+    where = prefix.rstrip('.') or 'config'
+    raise KeyError(f"can't set '{prefix}{head}': '{where}' is {type(obj).__name__}, "
+                   "not a config section, list or dict")

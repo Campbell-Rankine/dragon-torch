@@ -2,8 +2,10 @@ from typing import Optional, Sequence, Union
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+from .registry import register_wrapper
 
 
+@register_wrapper
 class Discretizer(gym.ActionWrapper):
     """Expose a MultiBinary button env (e.g. stable-retro) as Discrete(len(combos)).
 

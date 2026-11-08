@@ -68,7 +68,7 @@ dragon-tune dashboard --storage sqlite:///runs/optuna.db
 
 | Layer | Files | Contents |
 |---|---|---|
-| Env utils | `dragon_torch/data/envs/` | `DragonEnvConfig` and `make_vec_env`, which always uses `SAME_STEP` autoreset. Also `validate_env`, `register_dragon_env`, space conversions (`obs_to_tensor`, `action_to_env`), running normalisation, and `Discretizer` for stable-retro's button actions |
+| Env utils | `dragon_torch/data/envs/` | `DragonEnvConfig` and `make_vec_env`, which always uses `SAME_STEP` autoreset. Wrappers can be given as data (`WrapperSpec`, `register_wrapper`; see [docs/envs.md](docs/envs.md)). Also `validate_env`, `register_dragon_env`, space conversions (`obs_to_tensor`, `action_to_env`), running normalisation, and `Discretizer` for stable-retro's button actions |
 | Sources | `dragon_torch/data/RL/` | `EnvCollector` (env stepping, shared by all sources), the `Actor` protocol, `Transition`, `RolloutSource` with GAE, and `EpisodeSource` for evaluation |
 | Networks | `dragon_torch/modules/RL/` | `ActorCritic`, `PolicyOutput`, and distribution heads for Discrete, MultiDiscrete, MultiBinary and Box actions |
 | Losses | `dragon_torch/loss/RL.py` | `PPOLoss` and `A2CLoss`; each records its components (KL, clip fraction, entropy) |

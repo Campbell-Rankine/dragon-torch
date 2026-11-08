@@ -2,6 +2,7 @@ from typing import Any, Callable, Literal, Optional, Union
 import gymnasium as gym
 from gymnasium.vector import AsyncVectorEnv, AutoresetMode, SyncVectorEnv, VectorEnv
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .registry import WrapperSpec
 
 type EnvFn = Callable[..., gym.Env]
 type WrapperFn = Callable[[gym.Env], gym.Env]
@@ -10,8 +11,14 @@ type WrapperFn = Callable[[gym.Env], gym.Env]
 class DragonEnvConfig(BaseModel):
     """How to build a (vectorised) env from a registered id or any callable.
 
-    Wrappers are applied in order to each sub-env, e.g.
-    `[gym.wrappers.FlattenObservation, lambda e: Discretizer(e, COMBOS)]`.
+    Wrappers are applied in order to each sub-env. Each is a WrapperSpec (a
+    name + kwargs, which saves to JSON and can be tuned), its str shorthand, or
+    any callable `env -> env`:
+        [WrapperSpec(name='Discretizer', kwargs={'combos': COMBOS}),
+         'FlattenObservation',
+         lambda e: MyWrapper(e)]
+    Configs whose env and wrappers are all data (`portable`) can be rebuilt
+    exactly from their JSON; callables are saved only as their repr.
     Use vectorization='async' for envs that can't share a process, e.g.
     stable-retro (one emulator per process) or slow simulators.
     """
@@ -20,7 +27,7 @@ class DragonEnvConfig(BaseModel):
     env_id: Optional[str] = None
     env_fn: Optional[EnvFn] = None
     env_kwargs: dict[str, Any] = {}
-    wrappers: list[WrapperFn] = []
+    wrappers: list[Union[WrapperSpec, WrapperFn]] = []
     n_envs: int = Field(default=1, ge=1)
     seed: int = 0
     vectorization: Literal['sync', 'async'] = 'sync'
@@ -30,6 +37,11 @@ class DragonEnvConfig(BaseModel):
         if (self.env_id is None) == (self.env_fn is None):
             raise ValueError("Set exactly one of env_id or env_fn")
         return self
+
+    @property
+    def portable(self) -> bool:
+        """True if the config is pure data: rebuildable from its JSON alone."""
+        return self.env_fn is None and all(isinstance(w, WrapperSpec) for w in self.wrappers)
 
 
 def make_env_fn(cfg: DragonEnvConfig) -> Callable[[], gym.Env]:

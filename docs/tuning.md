@@ -170,7 +170,7 @@ with PPOTrainer(cfg) as trainer:
     trainer.fit()
 ```
 
-Configs that contain callables, such as `env_fn` or wrappers, store those callables as their `repr`. Pass them in again when you rebuild.
+Configs that contain callables, such as `env_fn` or a lambda wrapper, store those callables as their `repr`, and you have to pass them in again when you rebuild. Wrappers given as `WrapperSpec`s save as data, so their configs rebuild exactly. See [envs.md](envs.md#wrappers-as-data).
 
 Every trial's history includes `val_return`, `val_return_smooth`, `episode_return`, `approx_kl`, `clip_frac`, `entropy`, `policy_loss`, `value_loss`, `lr`, `steps_per_sec` and `global_step`.
 

@@ -57,7 +57,7 @@ Import from `dragon_torch.trainers.RL`. The plain `trainers` package doesn't imp
 
 **`apply_overrides`**
 
-`apply_overrides(cfg, {'rollout.n_steps': 256, 'optim.lr': 3e-4})` returns a copy with those fields replaced by dotted path. Every section it changes is re-validated, so the checks above still run, and unknown keys raise an error. Tuning search spaces use this to apply sampled values.
+`apply_overrides(cfg, {'rollout.n_steps': 256, 'optim.lr': 3e-4})` returns a copy with those fields replaced by dotted path. Paths can also index into lists and dicts, for example `'env.wrappers.0.kwargs.cost'` (see [envs.md](envs.md#tuning-wrapper-settings)). Every section it changes is re-validated, so the checks above still run, and unknown keys raise an error. Tuning search spaces use this to apply sampled values.
 
 **JSON**
 
