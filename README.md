@@ -27,6 +27,15 @@ uv run --extra test --extra torch-cpu --extra torch-ext pytest            # ever
 uv run --extra test --extra torch-cpu --extra torch-ext pytest -m "not network"  # skip Hugging Face Hub tests
 ```
 
+### Tuning / monitoring:
+
+`utils/tuning/` runs optuna studies over any `_DragonModel` (pruning, multi-objective, shared storage for parallel workers) and serves them in `optuna-dashboard`. See [docs/tuning.md](docs/tuning.md).
+
+```bash
+uv sync --extra tune
+python -m utils.tuning.monitor dashboard --storage sqlite:///runs/optuna.db
+```
+
 ### TODO:
 
 - [ ] : Setup Lazy Loading for hugging face sources.

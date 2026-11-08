@@ -23,6 +23,8 @@ packages = ["."]
 
 test=["pytest>=9.1.1"]
 
+tune=["optuna-dashboard"]
+
 RL=[
   "stable-retro[extra]",
   "stable-baselines3[extra]",
