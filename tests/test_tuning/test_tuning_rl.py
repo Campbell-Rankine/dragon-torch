@@ -111,7 +111,8 @@ class TestRLStudy:
             return spec
 
         cfg = rl_tune_config('ppo', PPOTrainer, run_dir=tmp_path / 'runs')
-        study = optuna.create_study(direction='maximize', pruner=AlwaysPrune())
+        study = optuna.create_study(direction='maximize', pruner=AlwaysPrune(),
+                                    sampler=optuna.samplers.TPESampler(seed=0))
         study.optimize(DragonObjective(cfg, small_space().suggest, tracking_build), n_trials=1)
         t = study.trials[0]
         assert t.state == PRUNED and t.last_step == 128 and 'prune_reason' in t.user_attrs
@@ -119,14 +120,17 @@ class TestRLStudy:
         assert trainers[0].evaluator.collector.env.closed
 
     def test_divergence_prunes(self, tmp_path):
-        cfg = rl_tune_config('ppo', PPOTrainer, run_dir=tmp_path / 'runs', n_trials=1)
-        study = run_study(cfg, small_space(**{'optim.lr': 0.5}).suggest,
+        cfg = rl_tune_config('ppo', PPOTrainer, run_dir=tmp_path / 'runs', n_trials=1, seed=0)
+        # approx_kl is measured before each minibatch's update, so it is always 0 with one
+        # minibatch per rollout; two update epochs guarantee a measurable KL
+        space = small_space(**{'optim.lr': 0.5, 'rollout.update_epochs': 2})
+        study = run_study(cfg, space.suggest,
                           builder(tmp_path, guard=GuardConfig(max_kl=1e-9, kl_patience=1)))
         t = study.trials[0]
         assert t.state == PRUNED and t.user_attrs['prune_reason'].startswith('diverged: approx_kl')
 
     def test_a2c_multi_objective(self, tmp_path):
-        cfg = rl_tune_config('a2c-mo', A2CTrainer, run_dir=tmp_path / 'runs', n_trials=2,
+        cfg = rl_tune_config('a2c-mo', A2CTrainer, run_dir=tmp_path / 'runs', n_trials=2, seed=0,
                              extra_metrics={'steps_per_sec': 'maximize'})
         space = a2c_space().narrow({'rollout.n_steps': CategoricalParam(choices=[8, 16]),
                                     'policy.hidden': CategoricalParam(choices=['16x16'])})

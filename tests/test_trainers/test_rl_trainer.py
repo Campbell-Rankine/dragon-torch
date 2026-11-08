@@ -1,5 +1,6 @@
 import json
 import math
+import warnings
 import pytest
 import torch
 from data.envs import DragonEnvConfig
@@ -58,6 +59,23 @@ class TestConfig:
     def test_eval_more_often_than_epochs_warns(self, tmp_path):
         with pytest.warns(UserWarning, match='every_steps'):
             ppo_cfg(tmp_path, eval=EvalConfig(every_steps=8))
+
+    def test_kl_guard_without_updates_warns(self, tmp_path):
+        with pytest.warns(UserWarning, match='approx_kl is always 0'):
+            ppo_cfg(tmp_path, rollout=RolloutConfig(n_steps=16, update_epochs=1, n_minibatches=1))
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            ppo_cfg(tmp_path, rollout=RolloutConfig(n_steps=16, update_epochs=1, n_minibatches=1),
+                    guard=GuardConfig(max_kl=None))
+            ppo_cfg(tmp_path, rollout=RolloutConfig(n_steps=16, update_epochs=1, n_minibatches=1),
+                    guard=None)
+
+    def test_a2c_default_guard_has_no_kl_check(self, tmp_path):
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            cfg = A2CTrainerConfig(env=env(), model=DragonRLConfig(checkpoint_dir=tmp_path,
+                                                                   save_every=1))
+        assert cfg.guard is not None and cfg.guard.max_kl is None
 
     def test_policy_hidden_string(self, tmp_path):
         assert ppo_cfg(tmp_path, policy={'hidden': '32x16'}).policy.hidden == (32, 16)

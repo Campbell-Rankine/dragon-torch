@@ -53,6 +53,7 @@ Import from `trainers.RL`. The plain `trainers` package doesn't import it, so su
 - `rollout.n_steps × env.n_envs` must be divisible by `rollout.n_minibatches`. Otherwise `RolloutSource` would silently drop the leftover samples.
 - `optim.anneal_lr` requires `model.total_timesteps`.
 - If `eval.every_steps` is smaller than one epoch, the config warns, because every epoch would evaluate and scheduled steps would be skipped.
+- If `guard.max_kl` is set but `update_epochs × n_minibatches == 1`, the config warns, because `approx_kl` is then always 0 (see [Divergence guard](#divergence-guard)).
 
 **`apply_overrides`**
 
@@ -127,6 +128,11 @@ The schedule is a function of the record rather than a stateful torch scheduler.
 - `entropy < min_entropy` after `entropy_after_steps` env steps
 
 The guard only checks keys the record contains, so A2C, which records no KL, works too. Outside tuning, the exception stops `fit`. Inside a study, the objective turns it into a pruned trial.
+
+**The KL check needs more than one update per rollout.** `PPOLoss` measures `approx_kl` before each minibatch's optimizer step, so the first minibatch of every rollout always reads 0. When `rollout.update_epochs × rollout.n_minibatches == 1`, every recorded `approx_kl` is 0 and the KL check can't fire:
+
+- The config warns if `guard.max_kl` is set in that case.
+- `A2CTrainerConfig` defaults to `GuardConfig(max_kl=None)`, which keeps the NaN/inf check.
 
 ## Checkpoints and resuming
 

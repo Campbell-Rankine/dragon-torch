@@ -102,7 +102,11 @@ class OptimConfig(BaseModel):
 
 
 class GuardConfig(BaseModel):
-    """DivergenceGuard settings; max_kl=None disables the KL check."""
+    """DivergenceGuard settings; max_kl=None disables the KL check.
+
+    approx_kl is measured before each minibatch's update, so the first minibatch
+    of every rollout reads 0: with update_epochs x n_minibatches == 1 (A2C) the
+    KL check can never fire. The non-finite-loss check works regardless."""
     max_kl: Optional[float] = Field(default=0.5, gt=0)
     kl_patience: int = Field(default=2, ge=1)
     min_entropy: Optional[float] = None
@@ -133,6 +137,11 @@ class DragonRLTrainerConfig(DragonTrainerConfig):
                              f"rollout.n_minibatches = {mb}")
         if self.optim.anneal_lr and self.model.total_timesteps is None:
             raise ValueError("optim.anneal_lr needs model.total_timesteps")
+        updates = self.rollout.update_epochs * mb
+        if self.guard is not None and self.guard.max_kl is not None and updates == 1:
+            warnings.warn("guard.max_kl is set but rollout.update_epochs x n_minibatches == 1, so "
+                          "approx_kl is always 0 and the KL check can't fire; set "
+                          "guard.max_kl=None or use more minibatches / update epochs", stacklevel=2)
         if self.eval is not None and self.eval.every_steps < spe:
             warnings.warn(f"eval.every_steps={self.eval.every_steps} < steps per epoch ({spe}); "
                           "every epoch evaluates and scheduled steps get skipped", stacklevel=2)
