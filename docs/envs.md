@@ -17,6 +17,84 @@ env = DragonEnvConfig(
     wrappers=[WrapperSpec(name='ClipReward', kwargs={'max_reward': 1.0}), 'FlattenObservation'])
 ```
 
+## Customising a prebuilt env
+
+Any Gymnasium env works: pass its id, or any factory such as an env class. There are three ways to change one:
+
+| You want to change | Use | Why |
+|---|---|---|
+| The reward the agent trains on (shaping, penalties, bonuses) | A wrapper in `env.wrappers` | The env's own reward stays the task, so trials are scored on it (see [Raw and shaped rewards](#raw-and-shaped-rewards)) |
+| What the agent sees or how it acts: flattening, frame stacking, picking keys, discretising buttons, rescaling actions | A wrapper in `env.wrappers` | The network is built from the wrapped spaces, so nothing else changes |
+| The task itself: dynamics, termination, the reward you want to be measured on, extra state | A subclass of the env, registered with `register_dragon_env` | Anything inside the env counts as raw |
+| An existing wrapper's behaviour | A subclass of that wrapper, registered with `register_wrapper` | Keeps its settings tunable as `WrapperSpec` kwargs |
+
+Wrappers compose, save to JSON and can be tuned. Reach for a subclass only when the change really is part of the task.
+
+### Subclassing an env
+
+```python
+from gymnasium.envs.classic_control import CartPoleEnv
+from dragon_torch.data.envs import DragonEnvConfig, register_dragon_env
+
+class HeavyPoleCartPole(CartPoleEnv):
+    def __init__(self, masspole: float = 0.5, **kwargs):
+        super().__init__(**kwargs)
+        self.masspole = masspole
+        self.total_mass = self.masspole + self.masscart
+        self.polemass_length = self.masspole * self.length
+
+register_dragon_env('HeavyPoleCartPole-v0', HeavyPoleCartPole, max_episode_steps=500)
+
+env = DragonEnvConfig(env_id='HeavyPoleCartPole-v0', env_kwargs={'masspole': 0.5}, n_envs=8)
+```
+
+- **Register it and use `env_id`.** The config stays portable (`DragonEnvConfig.portable`), and `env_kwargs` can be tuned like any other setting (`'env.env_kwargs.masspole'`).
+- **Registration options apply.** `max_episode_steps` adds a `TimeLimit`, as with any registered env.
+- **Async and tuning workers.** `make_env_fn` looks up the registration in the process that builds the vector env and passes it to async sub-envs, so they work even though they never ran `register_dragon_env`. A tuning worker that loads a saved `config.json` is a new process, though, so put the `register_dragon_env` call in a module the worker imports. An id of the form `'mypkg.envs:HeavyPoleCartPole-v0'` imports `mypkg.envs` on demand.
+- **`env_fn=HeavyPoleCartPole`** also works without registering, but isn't portable: a saved config only records its `repr`.
+
+### Wrappers that change spaces
+
+The trainers build the policy from the spaces after every wrapper, so a wrapper that changes them needs no other changes:
+
+```python
+env = DragonEnvConfig(env_fn=MyButtonEnv, wrappers=[
+    'FlattenObservation',                                  # Dict obs -> flat Box
+    WrapperSpec(name='Discretizer', kwargs={'combos': [[], ['LEFT'], ['RIGHT']]}),  # MultiBinary -> Discrete(3)
+])
+```
+
+The default `ActorCritic` reads `Box` and `Discrete` observations. For anything else, such as `Dict` or `Tuple`, either add `FlattenObservation` or pass a custom network with `module=` (or override `build_module`). Without one, building the trainer fails with `No default encoder for Dict observations`. Image observations need a CNN encoder: see `ActorCritic(encoder=...)`.
+
+Wrappers are applied in the order listed, so put observation-flattening wrappers after any wrapper that reads the structured observation.
+
+### Subclassing a wrapper
+
+```python
+import gymnasium as gym
+from dragon_torch.data.envs import register_wrapper
+
+@register_wrapper('clip_and_bonus')
+class ClipAndBonus(gym.wrappers.ClipReward):
+    def __init__(self, env, max_reward: float = 1.0, bonus: float = 0.0):
+        super().__init__(env, max_reward=max_reward)
+        self.bonus = bonus
+
+    def reward(self, reward):
+        return super().reward(reward) + self.bonus
+
+WrapperSpec(name='clip_and_bonus', kwargs={'max_reward': 0.5, 'bonus': 0.25})
+```
+
+Give the constructor keyword arguments with defaults, so `WrapperSpec` can check them and a search space can tune them.
+
+### Checklist for a new env
+
+1. Run `validate_env(cfg)` once on the base env, or set `validate_env=True` on the trainer config to check it with wrappers applied (see [Checking an env before training](#checking-an-env-before-training)).
+2. Keep shaping in `env.wrappers`, so `val_return` stays the task's return.
+3. Normalise with `rollout.normalize_obs` / `normalize_reward`, not wrappers (see [Normalisation](#normalisation)).
+4. Use `vectorization='async'` for envs that can't share a process, such as stable-retro, or for slow simulators.
+
 ## Wrappers as data
 
 Each entry in `wrappers` can be:

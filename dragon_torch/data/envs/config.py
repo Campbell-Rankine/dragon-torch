@@ -103,9 +103,18 @@ class DragonEnvConfig(BaseModel):
 
 def make_env_fn(cfg: DragonEnvConfig) -> Callable[[], gym.Env]:
     """A picklable thunk building one wrapped sub-env:
-    base env -> RecordRawReward -> cfg.wrappers (in order)."""
+    base env -> RecordRawReward -> cfg.wrappers (in order).
+
+    A registered env_id is looked up here, in the calling process, and the
+    thunk carries its EnvSpec: async sub-envs run in fresh processes that never
+    ran your register_dragon_env call. ('module:Env-v0' ids import their module
+    themselves, so they stay as strings.)"""
+    env_id: Union[str, gym.envs.registration.EnvSpec, None] = cfg.env_id
+    if env_id is not None and ':' not in env_id:
+        env_id = gym.spec(env_id)
+
     def _make() -> gym.Env:
-        env = gym.make(cfg.env_id, **cfg.env_kwargs) if cfg.env_id is not None \
+        env = gym.make(env_id, **cfg.env_kwargs) if env_id is not None \
             else cfg.env_fn(**cfg.env_kwargs)
         env = RecordRawReward(env)
         for wrapper in cfg.wrappers:
