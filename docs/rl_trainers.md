@@ -44,6 +44,7 @@ Import from `dragon_torch.trainers.RL`. The plain `trainers` package doesn't imp
 | `optim` | `OptimConfig` | `name` (`adam`, `adamw`, `rmsprop` or `sgd`), `lr`, `eps`, `weight_decay`, `alpha`, `momentum`, `anneal_lr`, `final_lr_frac` |
 | `guard` | `GuardConfig \| None` | `max_kl`, `kl_patience`, `min_entropy`, `entropy_after_steps`. `None` turns the guard off |
 | `seed` | `int` | Torch seed for network initialisation |
+| `validate_env` | `bool` | Run Gymnasium's env checker on the wrapped env before building anything (default `False`; see [envs.md](envs.md#checking-an-env-before-training)) |
 
 **Algorithm sections**
 - `PPOTrainerConfig.ppo`: `clip_coef`, `vf_coef`, `ent_coef`, `clip_vloss`, `normalize_advantages`. The rollout defaults to 4 update epochs of 4 minibatches.
@@ -65,7 +66,7 @@ Configs round-trip through JSON with `model_dump_json()` and `PPOTrainerConfig.m
 
 ## Trainer
 
-`DragonRLTrainer(cfg, module=None)` builds the run by calling these hooks in order. Override any of them:
+`DragonRLTrainer(cfg, module=None)` builds the run by calling these hooks in order. Override any of them. Before the first, `check_envs` runs Gymnasium's env checker when `validate_env` is set.
 
 1. `build_source` returns a `RolloutSource` built from `env` and `rollout`.
 2. `build_evaluator` returns an `EpisodeSource`, or `None` when `eval` is `None`.

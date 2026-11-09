@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import ClassVar, Literal, Optional, Sequence
 import torch
+from dragon_torch.data.envs import check_env_config
 from dragon_torch.data.RL import EpisodeSource, RolloutSource
 from dragon_torch.loss.RL import RLLoss
 from dragon_torch.models.base import DataLike, EpochCallback
@@ -38,6 +39,7 @@ class DragonRLTrainer(DragonTrainer, ABC):
         self.eval_callback: Optional[StepEvalCallback] = None
         self.guard: Optional[DivergenceGuard] = None
         try:
+            self.check_envs()
             torch.manual_seed(cfg.seed)
             self.source = self.build_source()
             self.evaluator = self.build_evaluator()
@@ -54,6 +56,17 @@ class DragonRLTrainer(DragonTrainer, ABC):
             raise
 
     # ------- build hooks (called in this order) ------- #
+    def check_envs(self) -> None:
+        """With config.validate_env, run gymnasium's env checker on one sub-env
+        of the training env as the agent sees it (wrappers applied), and on
+        eval.env if it's set separately. Runs before any vector env is built,
+        so a broken env or wrapper fails here with EnvCheckError, not mid-run."""
+        if not self.config.validate_env:
+            return
+        check_env_config(self.config.env, 'env')
+        if self.config.eval is not None and self.config.eval.env is not None:
+            check_env_config(self.config.eval.env, 'eval.env')
+
     def build_source(self) -> RolloutSource:
         r = self.config.rollout
         return RolloutSource(self.config.env, n_steps=r.n_steps, gamma=r.gamma,

@@ -7,8 +7,8 @@ import optuna
 import pytest
 from gymnasium import spaces
 from pydantic import ValidationError
-from dragon_torch.data.envs import (DragonEnvConfig, WrapperNormalizationWarning, WrapperSpec,
-                                    make_env_fn, normalizing_wrappers, register_wrapper,
+from dragon_torch.data.envs import (DragonEnvConfig, EnvCheckError, WrapperNormalizationWarning,
+                                    WrapperSpec, check_env_config, make_env_fn, normalizing_wrappers, register_wrapper,
                                     registered_wrappers, resolve_wrapper, unregister_wrapper)
 from dragon_torch.data.envs.wrappers import Discretizer
 from dragon_torch.models.RL import DragonRLConfig
@@ -249,3 +249,66 @@ class TestNormalizingWrapperWarning:
             warnings.simplefilter('error')
             warnings.filterwarnings('ignore', category=WrapperNormalizationWarning)
             cartpole(wrappers=['NormalizeObservation'])
+
+
+class WrongObsSpace(gym.ObservationWrapper):
+    """Declares a 2-d observation space but passes CartPole's 4-d obs through."""
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space = spaces.Box(-1, 1, (2,), np.float32)
+
+    def observation(self, obs):
+        return obs
+
+
+class BadReset(Buttons):
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        return np.zeros(3, np.float32), {}  # outside its own observation space
+
+
+class TestValidateEnvFlag:
+    def config(self, tmp_path, env, **kw):
+        return PPOTrainerConfig(
+            env=env, model=DragonRLConfig(checkpoint_dir=tmp_path, save_every=1000, total_timesteps=32),
+            rollout=RolloutConfig(n_steps=16, update_epochs=1, n_minibatches=1), guard=None,
+            validate_env=True, **kw)
+
+    def test_off_by_default(self):
+        assert PPOTrainerConfig.model_fields['validate_env'].default is False
+
+    def test_valid_env_trains(self, tmp_path):
+        env = cartpole(wrappers=[WrapperSpec(name='test_scaled_reward', kwargs={'scale': 0.5})])
+        with PPOTrainer(self.config(tmp_path, env)) as trainer:
+            assert trainer.fit()
+
+    def test_broken_wrapper_is_blamed(self, tmp_path):
+        with pytest.raises(EnvCheckError, match=r'^env failed .*problem is in its wrappers.*observation space'):
+            PPOTrainer(self.config(tmp_path, cartpole(wrappers=[WrongObsSpace])))
+
+    def test_broken_base_env_is_blamed(self, tmp_path):
+        env = DragonEnvConfig(env_fn=BadReset, wrappers=[WrapperSpec(name='Discretizer', kwargs={'combos': [[], [0]]})])
+        with pytest.raises(EnvCheckError, match='base env fails too'):
+            PPOTrainer(self.config(tmp_path, env))
+
+    def test_custom_eval_env_checked(self, tmp_path):
+        cfg = self.config(tmp_path, cartpole(),
+                          eval=EvalConfig(every_steps=32, n_episodes=1,
+                                          env=cartpole(wrappers=[WrongObsSpace])))
+        with pytest.raises(EnvCheckError, match=r'^eval\.env failed'):
+            PPOTrainer(cfg)
+
+    def test_no_wrapped_env_nudge(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            check_env_config(cartpole(wrappers=['FlattenObservation']))
+        assert not [w for w in caught if 'unwrapped version' in str(w.message)]
+
+
+def test_framework_wrappers_rebuild_from_spec():
+    """RecordRawReward and Discretizer record their constructor args, so
+    gymnasium's env.spec can rebuild an env they wrap."""
+    env = make_env_fn(cartpole())()
+    again = env.spec.make()
+    assert isinstance(again, type(env))
+    env.close(), again.close()

@@ -171,3 +171,26 @@ Some limits:
 
 - `normalize_obs` needs a `Box` observation space, which it checks when the source is built. For dict, image or discrete observations, add a wrapper that flattens or converts them first, or normalise inside your encoder.
 - Other observation or reward transforms, such as `ClipReward`, `TransformObservation` or frame stacking, belong in `env.wrappers` as usual. Only the running-statistics wrappers move to the rollout settings.
+
+## Checking an env before training
+
+Set `validate_env=True` on a trainer config to run Gymnasium's env checker before anything is built:
+
+```python
+cfg = PPOTrainerConfig(env=env, model=..., validate_env=True)
+```
+
+`DragonRLTrainer.check_envs` runs first in the constructor, before any vector env starts. It checks one sub-env of `env`, and `eval.env` if you set one, **with the wrappers applied**: what the agent actually sees. That catches, for example, a wrapper whose declared `observation_space` doesn't match what it returns, before the network is built from the wrong shape.
+
+A failure raises `EnvCheckError`, which says which config failed and, when there are wrappers, where the problem is:
+
+```
+EnvCheckError: env failed gymnasium's env checker; the base env passes, so the problem is in its wrappers: AssertionError: The first element returned by `env.reset()` is not within the observation space.
+```
+
+Notes:
+
+- It's off by default. It builds and steps extra envs, which is cheap for most envs but slow for emulators such as stable-retro.
+- Soft problems, such as infinite `Box` bounds, are warnings, not errors.
+- The checker resets with fixed seeds and expects identical results, so a deliberately random wrapper fails it. Leave the flag off for those.
+- You can run the same checks yourself: `check_env_config(cfg)`, or `validate_env(cfg)` for the base env alone, or `validate_env(cfg, unwrapped=False)` for the wrapped env with Gymnasium's own errors.

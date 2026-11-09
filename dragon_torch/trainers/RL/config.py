@@ -124,6 +124,9 @@ class DragonRLTrainerConfig(DragonTrainerConfig):
     optim: OptimConfig = Field(default_factory=OptimConfig)
     guard: Optional[GuardConfig] = Field(default_factory=GuardConfig)
     seed: int = 0
+    # run gymnasium's env checker on the wrapped env (and a custom eval.env)
+    # before building anything; see DragonRLTrainer.check_envs
+    validate_env: bool = False
 
     @property
     def steps_per_epoch(self) -> int:

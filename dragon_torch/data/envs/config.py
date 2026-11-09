@@ -135,10 +135,39 @@ def validate_env(env: Union[gym.Env, DragonEnvConfig], unwrapped: bool = True) -
     from gymnasium.utils.env_checker import check_env
     built = make_env_fn(env)() if isinstance(env, DragonEnvConfig) else env
     try:
-        check_env(built.unwrapped if unwrapped else built, skip_render_check=True)
+        with warnings.catch_warnings():
+            if not unwrapped:  # checking the wrapped env is the point; skip gymnasium's nudge
+                warnings.filterwarnings('ignore', message='.*different from the unwrapped version')
+            # the close check rebuilds the env from env.spec, which fails for any
+            # wrapper that doesn't record its constructor args; the framework
+            # rebuilds envs from DragonEnvConfig instead, so skip it for wrapped envs
+            check_env(built.unwrapped if unwrapped else built, skip_render_check=True,
+                      skip_close_check=not unwrapped)
     finally:
         if built is not env:
             built.close()
+
+
+class EnvCheckError(ValueError):
+    """An env config failed gymnasium's env checker (see check_env_config)."""
+
+
+def check_env_config(cfg: DragonEnvConfig, name: str = 'env') -> None:
+    """Check one sub-env built from `cfg` with its wrappers applied, as the
+    agent will see it. On failure, also checks the base env to say where the
+    problem is, and raises EnvCheckError naming `name` (the config field)."""
+    try:
+        validate_env(cfg, unwrapped=False)
+    except Exception as wrapped_error:
+        where = ''
+        if cfg.wrappers:
+            try:
+                validate_env(cfg, unwrapped=True)
+                where = '; the base env passes, so the problem is in its wrappers'
+            except Exception:
+                where = '; the base env fails too'
+        raise EnvCheckError(f"{name} failed gymnasium's env checker{where}: "
+                            f"{type(wrapped_error).__name__}: {wrapped_error}") from wrapped_error
 
 
 def register_dragon_env(env_id: str, entry_point: Union[str, EnvFn], **kwargs: Any) -> None:
