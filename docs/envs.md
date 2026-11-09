@@ -138,3 +138,36 @@ model=DragonRLConfig(..., eval_return='shaped')
 Put reward shaping in `env.wrappers` when you want it kept separate from the task.
 
 If a wrapper drops `info`, so that `raw_reward` never reaches the collector, the collector falls back to the reward it actually received for those steps.
+
+## Normalisation
+
+Normalise with the rollout settings, not with Gymnasium wrappers:
+
+```python
+rollout=RolloutConfig(normalize_obs=True, normalize_reward=True)
+```
+
+The collector owns these normalisers and applies them after all of `env.wrappers`. That gives you things the wrappers can't:
+
+| | `rollout.normalize_*` | `NormalizeObservation` / `NormalizeReward` in `env.wrappers` |
+|---|---|---|
+| Statistics | One set, updated from every sub-env's batch | A separate set in each sub-env |
+| Evaluation | The eval env uses the training stats, frozen | The eval env starts its own stats from scratch and keeps updating them while it's scored |
+| Checkpoints | Saved and restored with the model | Lost; a resumed run starts from zero |
+| Logged returns | Unchanged: reward scaling only touches the training signal | `NormalizeReward` puts `episode_return_shaped`, `val_return_shaped` and `eval_return='shaped'` in normalised units |
+
+Building a `DragonEnvConfig` with `NormalizeObservation` or `NormalizeReward` in `wrappers` therefore raises a `WrapperNormalizationWarning` that names the setting to use instead. The check recognises specs, strings, wrapper classes and their subclasses, and `functools.partial` of them. It can't see inside a lambda or other function.
+
+If per-env normalisation really is what you want, silence the warning:
+
+```python
+import warnings
+from dragon_torch.data.envs import WrapperNormalizationWarning
+
+warnings.filterwarnings('ignore', category=WrapperNormalizationWarning)
+```
+
+Some limits:
+
+- `normalize_obs` needs a `Box` observation space, which it checks when the source is built. For dict, image or discrete observations, add a wrapper that flattens or converts them first, or normalise inside your encoder.
+- Other observation or reward transforms, such as `ClipReward`, `TransformObservation` or frame stacking, belong in `env.wrappers` as usual. Only the running-statistics wrappers move to the rollout settings.

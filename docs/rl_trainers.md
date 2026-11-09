@@ -110,7 +110,7 @@ class MyAlgoTrainer(DragonRLTrainer):
 | `val_return_smooth` | Mean of the last `smooth_window` evaluations |
 | `eval_step` | The scheduled step: a multiple of `every_steps`, capped at `total_timesteps`. It is the same across runs with different epoch sizes, unlike `global_step` |
 
-The eval env defaults to the training env with `eval.n_envs` sub-envs and `seed + seed_offset`, so evaluation episodes never replay training episodes. It also borrows the training source's observation normaliser.
+The eval env defaults to the training env with `eval.n_envs` sub-envs and `seed + seed_offset`, so evaluation episodes never replay training episodes. It also borrows the training source's observation normaliser, frozen, which is why normalisation belongs in `rollout.normalize_obs` rather than in a wrapper (see [envs.md](envs.md#normalisation)).
 
 ## LR annealing
 

@@ -1,11 +1,14 @@
+import functools
 import json
+import warnings
 import gymnasium as gym
 import numpy as np
 import optuna
 import pytest
 from gymnasium import spaces
 from pydantic import ValidationError
-from dragon_torch.data.envs import (DragonEnvConfig, WrapperSpec, make_env_fn, register_wrapper,
+from dragon_torch.data.envs import (DragonEnvConfig, WrapperNormalizationWarning, WrapperSpec,
+                                    make_env_fn, normalizing_wrappers, register_wrapper,
                                     registered_wrappers, resolve_wrapper, unregister_wrapper)
 from dragon_torch.data.envs.wrappers import Discretizer
 from dragon_torch.models.RL import DragonRLConfig
@@ -217,3 +220,32 @@ def test_tune_a_wrapper_setting(tmp_path):
         # the objective is the raw (task) return, not the shaping
         assert t.value == evals[-1]['val_return_smooth']
     assert json.loads((cfg.study_dir / 'best.json').read_text())['best']
+
+
+class TestNormalizingWrapperWarning:
+    @pytest.mark.parametrize('entry,setting', [
+        ('NormalizeObservation', 'rollout.normalize_obs'),
+        (WrapperSpec(name='NormalizeReward', kwargs={'gamma': 0.9}), 'rollout.normalize_reward'),
+        (gym.wrappers.NormalizeObservation, 'rollout.normalize_obs'),                       # class
+        (functools.partial(gym.wrappers.NormalizeReward, gamma=0.9), 'rollout.normalize_reward'),
+    ])
+    def test_warns_with_replacement_setting(self, entry, setting):
+        with pytest.warns(WrapperNormalizationWarning, match=setting):
+            cartpole(wrappers=[entry])
+
+    def test_subclass_detected(self):
+        class MyNorm(gym.wrappers.NormalizeObservation):
+            pass
+        assert normalizing_wrappers([MyNorm]) == [('MyNorm', 'rollout.normalize_obs')]
+
+    def test_other_wrappers_and_lambdas_are_silent(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', WrapperNormalizationWarning)
+            cartpole(wrappers=['FlattenObservation', WrapperSpec(name='test_scaled_reward'),
+                               lambda e: gym.wrappers.NormalizeObservation(e)])  # opaque: can't tell
+
+    def test_can_be_silenced(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            warnings.filterwarnings('ignore', category=WrapperNormalizationWarning)
+            cartpole(wrappers=['NormalizeObservation'])

@@ -1,3 +1,6 @@
+import functools
+import inspect
+import warnings
 from typing import Any, Callable, Literal, Optional, Union
 import gymnasium as gym
 from gymnasium.vector import AsyncVectorEnv, AutoresetMode, SyncVectorEnv, VectorEnv
@@ -7,6 +10,41 @@ from .wrappers import RecordRawReward
 
 type EnvFn = Callable[..., gym.Env]
 type WrapperFn = Callable[[gym.Env], gym.Env]
+
+
+class WrapperNormalizationWarning(UserWarning):
+    """A normalising gymnasium wrapper is in DragonEnvConfig.wrappers. Silence
+    it with warnings.filterwarnings('ignore', category=WrapperNormalizationWarning)
+    if per-env normalisation is really what you want."""
+
+
+# normalising wrapper -> the framework setting to use instead
+_NORMALIZERS: dict[type[gym.Wrapper], str] = {
+    gym.wrappers.NormalizeObservation: 'rollout.normalize_obs',
+    gym.wrappers.NormalizeReward: 'rollout.normalize_reward',
+}
+
+
+def _wrapper_class(wrapper: Any) -> Optional[type]:
+    """The class a wrappers entry builds, when it can be told without calling
+    it: a spec's factory, a class, or functools.partial of one. Lambdas and
+    other functions are opaque (None)."""
+    target = wrapper.factory if isinstance(wrapper, WrapperSpec) else wrapper
+    while isinstance(target, functools.partial):
+        target = target.func
+    return target if inspect.isclass(target) else None
+
+
+def normalizing_wrappers(wrappers: list[Any]) -> list[tuple[str, str]]:
+    """(wrapper class name, framework setting to use instead) for each entry
+    that normalises observations or rewards."""
+    found = []
+    for wrapper in wrappers:
+        cls = _wrapper_class(wrapper)
+        for normalizer, setting in _NORMALIZERS.items():
+            if cls is not None and issubclass(cls, normalizer):
+                found.append((cls.__name__, setting))
+    return found
 
 
 class DragonEnvConfig(BaseModel):
@@ -37,6 +75,18 @@ class DragonEnvConfig(BaseModel):
     def _one_source(self) -> "DragonEnvConfig":
         if (self.env_id is None) == (self.env_fn is None):
             raise ValueError("Set exactly one of env_id or env_fn")
+        return self
+
+    @model_validator(mode='after')
+    def _warn_normalizing_wrappers(self) -> "DragonEnvConfig":
+        # each sub-env (and the separate eval env) would keep its own running
+        # stats, never checkpointed and never applied to info['final_obs'];
+        # the collector's normalisers avoid all of that (see docs/envs.md)
+        for name, setting in normalizing_wrappers(self.wrappers):
+            warnings.warn(
+                f"{name} in env.wrappers keeps separate, uncheckpointed stats in every sub-env "
+                f"and in the eval env; use {setting}=True instead (docs/envs.md#normalisation)",
+                WrapperNormalizationWarning, stacklevel=2)
         return self
 
     @property
