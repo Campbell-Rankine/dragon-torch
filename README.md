@@ -35,6 +35,8 @@ with PPOTrainer(cfg) as trainer:
     history = trainer.fit()
 ```
 
+New to dragon-torch? The [tutorial](docs/tutorial.md) walks through this example step by step.
+
 ## Documentation
 
 See [docs/index.md](docs/index.md).
