@@ -4,7 +4,7 @@ import warnings
 import pytest
 import torch
 from dragon_torch.data.envs import DragonEnvConfig
-from dragon_torch.models.RL import DragonRLConfig
+from dragon_torch.models.RL import A2CConfig, A2CModel, DragonRLConfig, PPOConfig, PPOModel
 from dragon_torch.modules.RL import ActorCritic
 from dragon_torch.trainers import TrainingDiverged
 from dragon_torch.trainers.RL import (EVAL_STEP_KEY, A2CTrainer, A2CTrainerConfig, DivergenceGuard,
@@ -91,14 +91,44 @@ class TestConfig:
         assert a2c.optim.name == 'rmsprop'
         assert PPOTrainerConfig(env=env(), model=a2c.model).rollout.n_minibatches == 4
 
+    def test_model_config_becomes_the_algorithms(self, tmp_path):
+        plain = DragonRLConfig(checkpoint_dir=tmp_path, save_every=7, total_timesteps=500)
+        ppo = PPOTrainerConfig(env=env(), model=plain)
+        assert type(ppo.model) is PPOConfig and ppo.model.kind == 'ppo-model'
+        assert (ppo.model.save_every, ppo.model.total_timesteps, ppo.model.clip_coef) == (7, 500, 0.2)
+        # another algorithm's config keeps the shared settings, not its loss settings
+        a2c = A2CTrainerConfig(env=env(), model=A2CConfig(checkpoint_dir=tmp_path, save_every=7,
+                                                          ent_coef=0.3))
+        moved = PPOTrainerConfig(env=env(), model=a2c.model).model
+        assert type(moved) is PPOConfig and moved.save_every == 7 and moved.ent_coef == 0.0
+        # a custom kind is kept
+        custom = DragonRLConfig(checkpoint_dir=tmp_path, save_every=1, kind='my-run')
+        assert PPOTrainerConfig(env=env(), model=custom).model.kind == 'my-run'
+        # dicts (e.g. from JSON) validate directly
+        cfg = PPOTrainerConfig(env=env(), model={'checkpoint_dir': tmp_path, 'save_every': 1,
+                                                 'clip_coef': 0.3})
+        assert cfg.model.clip_coef == 0.3
+        assert PPOTrainerConfig.model_validate_json(cfg.model_dump_json()).model == cfg.model
+
+    def test_trainers_build_algorithm_models(self, tmp_path):
+        cfg = ppo_cfg(tmp_path, eval=None, model=PPOConfig(checkpoint_dir=tmp_path, save_every=1,
+                                                         clip_coef=0.1, ent_coef=0.01))
+        with PPOTrainer(cfg) as trainer:
+            assert type(trainer.model) is PPOModel and PPOTrainer.model_cls is PPOModel
+            assert (trainer.model.loss_fn.clip_coef, trainer.model.loss_fn.ent_coef) == (0.1, 0.01)
+        a2c = A2CTrainerConfig(env=env(), model=A2CConfig(checkpoint_dir=tmp_path, save_every=1,
+                                                          vf_coef=0.25))
+        with A2CTrainer(a2c) as trainer:
+            assert type(trainer.model) is A2CModel and trainer.model.loss_fn.vf_coef == 0.25
+
 
 class TestApplyOverrides:
     def test_nested_and_revalidated(self, tmp_path):
         cfg = ppo_cfg(tmp_path)
-        out = apply_overrides(cfg, {'rollout.n_steps': 8, 'ppo.clip_coef': 0.1,
+        out = apply_overrides(cfg, {'rollout.n_steps': 8, 'model.clip_coef': 0.1,
                                     'policy.hidden': '8x8', 'seed': 5})
         assert type(out) is PPOTrainerConfig
-        assert (out.rollout.n_steps, out.ppo.clip_coef, out.policy.hidden, out.seed) == \
+        assert (out.rollout.n_steps, out.model.clip_coef, out.policy.hidden, out.seed) == \
             (8, 0.1, (8, 8), 5)
         assert out.rollout.update_epochs == 1  # untouched siblings kept
         assert cfg.rollout.n_steps == 16  # original unchanged

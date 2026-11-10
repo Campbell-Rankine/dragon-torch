@@ -45,7 +45,7 @@ Uploads use PyPI trusted publishing. Add a publisher for this repo on PyPI with 
 
 ### Tuning / monitoring:
 
-`dragon_torch/utils/tuning/` runs optuna studies over any `_DragonModel` (pruning, multi-objective, shared storage for parallel workers) and serves them in `optuna-dashboard`. `dragon_torch/utils/tuning/RL.py` and `dragon_torch/utils/tuning/presets/` tune any RL trainer with PPO / A2C search spaces; `scripts/tune_rl.py` runs a study worker. See [docs/tuning.md](docs/tuning.md).
+`dragon_torch/utils/tuning/` runs optuna studies over any `_DragonModel` (pruning, multi-objective, shared storage for parallel workers) and serves them in `optuna-dashboard`. `dragon_torch/utils/tuning/RL.py` and `dragon_torch/utils/tuning/presets/` tune any RL trainer, with one search-space preset per algorithm for its single- and multi-agent models (`space_for`); `scripts/tune_rl.py` runs a study worker. See [docs/tuning.md](docs/tuning.md).
 
 ```bash
 uv sync --extra tune
@@ -69,11 +69,12 @@ dragon-tune dashboard --storage sqlite:///runs/optuna.db
 | Layer | Files | Contents |
 |---|---|---|
 | Env utils | `dragon_torch/data/envs/` | `DragonEnvConfig` and `make_vec_env`, which always uses `SAME_STEP` autoreset. Wrappers can be given as data (`WrapperSpec`, `register_wrapper`; see [docs/envs.md](docs/envs.md)). Also `validate_env`, `register_dragon_env`, space conversions (`obs_to_tensor`, `action_to_env`), running normalisation, and `Discretizer` for stable-retro's button actions |
-| Sources | `dragon_torch/data/RL/` | `EnvCollector` (env stepping, shared by all sources), the `Actor` protocol, `Transition`, `RolloutSource` with GAE, and `EpisodeSource` for evaluation |
-| Networks | `dragon_torch/modules/RL/` | `ActorCritic`, `PolicyOutput`, and distribution heads for Discrete, MultiDiscrete, MultiBinary and Box actions |
-| Losses | `dragon_torch/loss/RL.py` | `PPOLoss` and `A2CLoss`; each records its components (KL, clip fraction, entropy) |
-| Model | `dragon_torch/models/RL/base.py` | `DragonRLModel` adds gradient clipping and returns episode return from `evaluate`. Its epoch count comes from `total_timesteps`, minus the steps already taken |
-| Trainers | `dragon_torch/trainers/RL/` | `DragonRLTrainer` builds a whole run from one config: rollout source, evaluator, network, loss, optimizer, LR annealing, step-scheduled eval and a divergence guard. `PPOTrainer` and `A2CTrainer` add their loss. See [docs/rl_trainers.md](docs/rl_trainers.md) |
+| Sources | `dragon_torch/data/RL/` | `EnvCollector` (env stepping, shared by all sources), the `Actor` protocol, `Transition`, `RolloutSource` with GAE, and `EpisodeSource` for evaluation. Multi-agent versions of each are in `multi_agent.py` |
+| Multi-agent envs | `dragon_torch/data/envs/multi_agent.py` | `MultiAgentEnvConfig` for PettingZoo-style `ParallelEnv`s and gymnasium envs with per-agent `Dict` spaces, agent groups (`AgentGroups`) and `MultiAgentVectorEnv`. See [docs/multi_agent.md](docs/multi_agent.md) |
+| Networks | `dragon_torch/modules/RL/` | `SingleAgentPolicyModule` / `MultiAgentPolicyModule`; `ActorCritic` and `MultiAgentActorCritic` (one `ActorCritic` per agent group); `PolicyOutput`; and distribution heads for Discrete, MultiDiscrete, MultiBinary and Box actions |
+| Losses | `dragon_torch/loss/RL.py` | `PPOLoss` and `A2CLoss`, which each record their components (KL, clip fraction, entropy), and `MultiAgentLoss`, which applies either one to each agent group |
+| Model | `dragon_torch/models/RL/` | `DragonRLModel` (abstract) adds gradient clipping and returns episode return from `evaluate`. Its epoch count comes from `total_timesteps`, minus the steps already taken. `single_agent/` has `SingleAgentRLModel` and the algorithm models `PPOModel` / `A2CModel`; `multi_agent/` has `MultiAgentRLModel`, `MultiAgentPPOModel` and `MultiAgentA2CModel`. Each algorithm model's config holds its loss settings (`model.clip_coef`, ...) |
+| Trainers | `dragon_torch/trainers/RL/` | `DragonRLTrainer` builds a whole run from one config: rollout source, evaluator, network, loss, optimizer, LR annealing, step-scheduled eval and a divergence guard. `SingleAgentRLTrainer` and `MultiAgentRLTrainer` handle the env kind, and algorithm mixins supply the loss: `PPOTrainer`, `A2CTrainer`, `MultiAgentPPOTrainer` and `MultiAgentA2CTrainer`. See [docs/rl_trainers.md](docs/rl_trainers.md) |
 | SB3 | `dragon_torch/modules/external/sb3.py` | `DragonFeaturesExtractor` and `sb3_policy_kwargs` |
 
 

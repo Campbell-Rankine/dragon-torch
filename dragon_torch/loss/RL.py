@@ -1,7 +1,13 @@
 """Policy-gradient losses. Y_hat is a PolicyOutput; Y is the rollout `targets`
 dict produced by RolloutSource. Each loss leaves its components in
-`last_metrics`, which DragonRLModel averages into the epoch history."""
-from typing import Any
+`last_metrics`, which DragonRLModel averages into the epoch history.
+
+The algorithm losses (PPOLoss, A2CLoss) are single-agent: one PolicyOutput
+against one targets dict. MultiAgentLoss applies them per agent group."""
+import copy
+from collections import defaultdict
+from typing import Any, Mapping, Optional, Union
+import numpy as np
 import torch
 from dragon_torch.loss.base import DragonLossFunction
 
@@ -78,3 +84,55 @@ class A2CLoss(RLLoss):
         self.last_metrics = {'policy_loss': pg_loss.item(), 'value_loss': v_loss.item(),
                              'entropy': entropy.item()}
         return pg_loss - self.ent_coef * entropy + self.vf_coef * v_loss
+
+
+class MultiAgentLoss(RLLoss):
+    """Applies a single-agent RLLoss (e.g. PPOLoss) to each agent group and sums
+    the results, optionally weighted per group.
+
+        Y_hat  {group: PolicyOutput}     (MultiAgentPolicyModule output)
+        Y      {group: targets dict}     (MultiAgentRolloutSource targets)
+
+    Groups missing from Y (no live agents in the minibatch) are skipped.
+    `loss` is either one loss used for every group (copied per group, so their
+    metrics stay separate) or a {group: loss} dict.
+
+    last_metrics holds each group's components as '<name>/<group>', plus the
+    unprefixed name aggregated over groups (mean; max for approx_kl and
+    clip_frac, so DivergenceGuard reacts to the worst group).
+    """
+    kind = 'multi-agent'
+    MAX_AGGREGATED = frozenset({'approx_kl', 'clip_frac'})
+
+    def __init__(self, loss: Union[RLLoss, Mapping[str, RLLoss]],
+                 weights: Optional[Mapping[str, float]] = None):
+        super().__init__()
+        self.loss = loss
+        self.weights = dict(weights or {})
+        self._per_group: dict[str, RLLoss] = dict(loss) if isinstance(loss, Mapping) else {}
+
+    def group_loss(self, group: str) -> RLLoss:
+        if group not in self._per_group:
+            if isinstance(self.loss, Mapping):
+                raise KeyError(f"no loss for group '{group}'; losses: {sorted(self._per_group)}")
+            self._per_group[group] = copy.deepcopy(self.loss)
+        return self._per_group[group]
+
+    def compute(self, Y_hat: Mapping[str, Any], Y: Mapping[str, dict[str, torch.Tensor]],
+                **kw) -> torch.Tensor:
+        groups = [g for g in Y if g in Y_hat]
+        if not groups:
+            raise ValueError(f"no agent group has both outputs and targets "
+                             f"(outputs: {sorted(Y_hat)}, targets: {sorted(Y)})")
+        total, collected = 0.0, defaultdict(list)
+        metrics: dict[str, float] = {}
+        for g in groups:
+            fn = self.group_loss(g)
+            total = total + self.weights.get(g, 1.0) * fn(Y_hat[g], Y[g], **kw)
+            for k, v in getattr(fn, 'last_metrics', {}).items():
+                metrics[f"{k}/{g}"] = v
+                collected[k].append(v)
+        for k, values in collected.items():
+            metrics[k] = float(np.max(values) if k in self.MAX_AGGREGATED else np.mean(values))
+        self.last_metrics = metrics
+        return total

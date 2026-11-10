@@ -3,7 +3,6 @@ import json
 import warnings
 import gymnasium as gym
 import numpy as np
-import optuna
 import pytest
 from gymnasium import spaces
 from pydantic import ValidationError
@@ -13,10 +12,7 @@ from dragon_torch.data.envs import (DragonEnvConfig, EnvCheckError, WrapperNorma
 from dragon_torch.data.envs.wrappers import Discretizer
 from dragon_torch.models.RL import DragonRLConfig
 from dragon_torch.trainers.RL import EvalConfig, PPOTrainer, PPOTrainerConfig, RolloutConfig, apply_overrides
-from dragon_torch.utils.tuning import FloatParam, SearchSpace, read_history, run_study
-from dragon_torch.utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
-optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 @register_wrapper('test_scaled_reward')
@@ -193,6 +189,10 @@ class TestApplyOverridesPaths:
 def test_tune_a_wrapper_setting(tmp_path):
     """A search space can tune wrapper kwargs, and each trial's config.json
     rebuilds the exact env, wrappers included."""
+    optuna = pytest.importorskip('optuna', reason="tuning needs the 'tune' extra")
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    from dragon_torch.utils.tuning import FloatParam, SearchSpace, read_history, run_study
+    from dragon_torch.utils.tuning.RL import RLTrialBuilder, rl_tune_config
     base = PPOTrainerConfig(
         env=cartpole(n_envs=2, wrappers=[WrapperSpec(name='test_scaled_reward')]),
         model=DragonRLConfig(checkpoint_dir=tmp_path / 'unused', save_every=1000, total_timesteps=64),

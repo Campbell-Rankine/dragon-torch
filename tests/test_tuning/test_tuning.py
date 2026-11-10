@@ -1,8 +1,9 @@
 import io
 import json
 import math
-import optuna
 import pytest
+
+optuna = pytest.importorskip('optuna', reason="tuning needs the 'tune' extra")
 import torch
 from dragon_torch.models.base import DragonModel, DragonModelConfig
 from dragon_torch.models.RL import DragonRLModel

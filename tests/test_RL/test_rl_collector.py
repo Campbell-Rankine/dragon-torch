@@ -75,6 +75,16 @@ class TestEnvCollector:
         np.testing.assert_allclose(other.obs_normalizer.rms.mean, col.obs_normalizer.rms.mean)
         assert other.global_step == 10
 
+    def test_reward_scaling_state(self):
+        # regression: the scalar return stats became np.float64 after an
+        # update, and state_dict (so every checkpoint) raised
+        col = EnvCollector(counter_cfg(truncate_at=5), normalize_reward=True)
+        for _ in range(10):
+            col.step(CountingActor())
+        other = EnvCollector(counter_cfg(truncate_at=5), normalize_reward=True)
+        other.load_state_dict(col.state_dict())
+        assert other.reward_scaler.rms.var == pytest.approx(col.reward_scaler.rms.var)
+
     def test_normalize_obs_needs_box(self):
         with pytest.raises(TypeError, match='Box'):
             EnvCollector(DragonEnvConfig(env_id='FrozenLake-v1'), normalize_obs=True)

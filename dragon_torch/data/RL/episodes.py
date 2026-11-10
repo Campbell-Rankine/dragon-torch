@@ -16,16 +16,18 @@ class EpisodeSource:
 
     def __init__(self, env_cfg: DragonEnvConfig, n_episodes: int = 10,
                  deterministic: bool = True, max_steps: int = 1_000_000):
-        self.collector = EnvCollector(env_cfg, update_stats=False)
+        self.collector = self.make_collector(env_cfg)
         self.n_episodes, self.deterministic, self.max_steps = n_episodes, deterministic, max_steps
         self.actor: Optional[Actor] = None
+
+    def make_collector(self, env_cfg: Any) -> Any:
+        return EnvCollector(env_cfg, update_stats=False)
 
     def bind(self, model: Actor) -> None:
         if not isinstance(model, Actor):
             raise TypeError(f"EpisodeSource needs a model with act(), got {type(model)}")
         self.actor = model
-        train_collector = getattr(getattr(model, 'train_source', None), 'collector', None)
-        self.collector.obs_normalizer = getattr(train_collector, 'obs_normalizer', None)
+        self.collector.borrow_stats(getattr(getattr(model, 'train_source', None), 'collector', None))
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         if self.actor is None:
@@ -40,8 +42,7 @@ class EpisodeSource:
             self.collector.step(self.actor, deterministic=self.deterministic)
             steps += 1
             for ep in self.collector.drain_episodes():
-                yield {'return': ep.raw_return, 'shaped_return': ep.shaped_return,
-                       'length': ep.length}
+                yield ep.record()
                 yielded += 1
                 if yielded == self.n_episodes:
                     return

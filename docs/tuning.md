@@ -17,7 +17,7 @@ uv sync --extra tune   # adds optuna-dashboard; optuna itself is a core dependen
 | `monitor.py` | CLI with `summary`, `export` (CSV) and `dashboard` |
 | `space.py` | `SearchSpace` with `FloatParam`, `IntParam` and `CategoricalParam`. Parameters are named by config path, for example `optim.lr` |
 | `RL.py` | `rl_tune_config` and `RLTrialBuilder`, for any `DragonRLTrainer`. Needs the `RL` extra |
-| `presets/` | `ppo_space()` and `a2c_space()`: search spaces over the PPO and A2C trainer configs |
+| `presets/` | `ppo_space()` and `a2c_space()`, the search spaces for `PPOModel` and `A2CModel`; `space_for(model or trainer)` looks one up and `register_preset` adds one |
 
 The tuner relies on the epoch-callback hook in `DragonModel.fit` / `DragonTrainer.fit` (`dragon_torch.models.base.EpochCallback`). After each epoch, the hook gets the model and that epoch's history record. A callback can:
 
@@ -99,7 +99,7 @@ Optuna can't prune multi-objective studies, because `trial.report` isn't support
 
 ## RL training runs
 
-RL studies tune a `DragonRLTrainer` (`PPOTrainer` or `A2CTrainer`). [rl_trainers.md](rl_trainers.md) describes the trainers and their configs; this section covers the tuning side. To run a study directly:
+RL studies tune a `DragonRLTrainer`: `PPOTrainer` or `A2CTrainer`, or their multi-agent versions. These train a `PPOModel` or `A2CModel` (or `MultiAgentPPOModel` / `MultiAgentA2CModel`). [rl_trainers.md](rl_trainers.md) describes the trainers and their configs; this section covers the tuning side. To run a study directly:
 
 ```bash
 uv run --extra RL --extra torch-cpu python scripts/tune_rl.py --algo ppo --env CartPole-v1 \
@@ -110,19 +110,19 @@ You can run that command in several terminals at once; every worker joins the sa
 
 ```python
 from dragon_torch.data.envs import DragonEnvConfig
-from dragon_torch.models.RL import DragonRLConfig
+from dragon_torch.models.RL import PPOConfig, PPOModel
 from dragon_torch.trainers.RL import EvalConfig, PPOTrainer, PPOTrainerConfig
 from dragon_torch.utils.tuning import run_study
-from dragon_torch.utils.tuning.presets import ppo_space
+from dragon_torch.utils.tuning.presets import space_for
 from dragon_torch.utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
 base = PPOTrainerConfig(
     env=DragonEnvConfig(env_id='CartPole-v1', n_envs=8),
-    model=DragonRLConfig(checkpoint_dir='runs/unused', save_every=1_000_000, total_timesteps=100_000),
+    model=PPOConfig(checkpoint_dir='runs/unused', save_every=1_000_000, total_timesteps=100_000),
     eval=EvalConfig(every_steps=10_000, n_episodes=10, smooth_window=3))
 cfg = rl_tune_config('ppo-cartpole', PPOTrainer, storage='journal:runs/optuna.log',
                      n_trials=20, n_warmup_steps=20_000)          # warmup in env steps
-space = ppo_space().fix({'rollout.gamma': 0.99})
+space = space_for(PPOModel).fix({'rollout.gamma': 0.99})   # = ppo_space(); space_for(PPOTrainer) works too
 run_study(cfg, space.suggest, RLTrialBuilder(trainer_cls=PPOTrainer, base_config=base))
 ```
 
@@ -142,10 +142,19 @@ The pruner compares trials at the **same reported step**, which is why it uses `
 
 A `SearchSpace` names its parameters by config path, so the values it samples apply directly onto the trainer config, and the dashboard shows names like `rollout.n_steps`.
 
-| Preset | Parameters |
-|---|---|
-| `ppo_space()` | `optim.lr`, `optim.anneal_lr`, `rollout.{n_steps, n_minibatches, update_epochs, gamma, gae_lambda, normalize_obs}`, `ppo.{clip_coef, ent_coef, vf_coef}`, `model.max_grad_norm`, `policy.hidden` |
-| `a2c_space()` | `optim.lr`, `optim.anneal_lr`, `rollout.{n_steps, gamma, gae_lambda, normalize_obs}`, `a2c.{ent_coef, vf_coef, normalize_advantages}`, `model.max_grad_norm`, `policy.hidden` |
+Presets belong to model classes, one preset per algorithm. The algorithm's loss settings are fields of its model config, so they're tuned under `model.`, next to `model.max_grad_norm`. These paths are the same in single- and multi-agent trainer configs, so a preset works for both:
+
+| Models | Preset | Parameters |
+|---|---|---|
+| `PPOModel`, `MultiAgentPPOModel` | `ppo_space()` | `optim.lr`, `optim.anneal_lr`, `rollout.{n_steps, n_minibatches, update_epochs, gamma, gae_lambda, normalize_obs}`, `model.{clip_coef, ent_coef, vf_coef, max_grad_norm}`, `policy.hidden` |
+| `A2CModel`, `MultiAgentA2CModel` | `a2c_space()` | `optim.lr`, `optim.anneal_lr`, `rollout.{n_steps, gamma, gae_lambda, normalize_obs}`, `model.{ent_coef, vf_coef, normalize_advantages, max_grad_norm}`, `policy.hidden` |
+
+`space_for(target)` returns a fresh copy of the right preset. `target` can be:
+
+- a model class or model instance, such as `PPOModel`, or
+- a trainer class or instance, which is resolved through its `model_cls`. For example, `space_for(MultiAgentPPOTrainer)` returns `ppo_space()`.
+
+A subclass of `PPOModel` gets the PPO preset unless you register one for it with `register_preset(MyPPO, my_space)`. With no matching preset, `space_for` raises `KeyError`.
 
 To customise a preset:
 

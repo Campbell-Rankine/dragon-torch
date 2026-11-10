@@ -21,8 +21,9 @@ from dragon_torch.data.envs.wrappers import RAW_REWARD_KEY
 
 @dataclass
 class ActOutput:
-    action: torch.Tensor  # batched, in the policy's own space (what buffers store)
-    extras: dict[str, torch.Tensor] = field(default_factory=dict)  # e.g. log_prob, value
+    action: Any  # batched tensor in the policy's own space ({group: tensor} for multi-agent)
+    # e.g. log_prob, value: tensors, or {group: tensor} dicts for multi-agent actors
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -47,6 +48,11 @@ class Episode(NamedTuple):
     raw_return: float
     length: int
     shaped_return: float
+
+    def record(self) -> dict[str, Any]:
+        """What EpisodeSource yields for this episode."""
+        return {'return': self.raw_return, 'shaped_return': self.shaped_return,
+                'length': self.length}
 
 
 @dataclass
@@ -169,6 +175,11 @@ class EnvCollector:
                           extras=out.extras)
 
     # ------- stats / state ------- #
+    def borrow_stats(self, other: Any) -> None:
+        """Use another collector's obs normaliser (read-only when update_stats
+        is False), e.g. an evaluator borrowing the training source's."""
+        self.obs_normalizer = getattr(other, 'obs_normalizer', None)
+
     def drain_episodes(self) -> list[Episode]:
         """Episodes finished since the last drain."""
         finished, self._finished = self._finished, []

@@ -19,9 +19,11 @@ class RunningMeanStd:
         batch_mean, batch_var, n = x.mean(0), x.var(0), x.shape[0]
         delta = batch_mean - self.mean
         total = self.count + n
-        self.mean = self.mean + delta * n / total
+        # asarray: with shape () numpy arithmetic returns np.float64 scalars,
+        # which torch.from_numpy (state_dict) rejects
+        self.mean = np.asarray(self.mean + delta * n / total, np.float64)
         m2 = self.var * self.count + batch_var * n + delta ** 2 * self.count * n / total
-        self.var = m2 / total
+        self.var = np.asarray(m2 / total, np.float64)
         self.count = total
 
     def state_dict(self) -> dict[str, Any]:

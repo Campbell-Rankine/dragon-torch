@@ -1,18 +1,20 @@
-from typing import Optional
-from dragon_torch.loss.RL import A2CLoss
-from dragon_torch.modules.RL import DragonPolicyModule
-from dragon_torch.trainers.RL.trainer import DragonRLTrainer
-from .config import A2CTrainerConfig
+from dragon_torch.models.RL import MultiAgentA2CModel, A2CModel
+from dragon_torch.trainers.RL.trainer import MultiAgentRLTrainer, SingleAgentRLTrainer
+from .config import MultiAgentA2CTrainerConfig, A2CTrainerConfig
 
 
-class A2CTrainer(DragonRLTrainer):
-    """Advantage actor-critic over a DragonRLTrainer run."""
+class A2CTrainer(SingleAgentRLTrainer):
+    """A2C on a gymnasium env: trains a A2CModel, whose config (A2CConfig) holds
+    the loss settings."""
     config: A2CTrainerConfig
+    config_cls = A2CTrainerConfig
+    model_cls = A2CModel
 
-    def __init__(self, cfg: A2CTrainerConfig, module: Optional[DragonPolicyModule] = None):
-        if not isinstance(cfg, A2CTrainerConfig):
-            raise TypeError(f"A2CTrainer needs an A2CTrainerConfig, got {type(cfg).__name__}")
-        super().__init__(cfg, module)
 
-    def build_loss(self) -> A2CLoss:
-        return A2CLoss(**self.config.a2c.model_dump())
+class MultiAgentA2CTrainer(MultiAgentRLTrainer):
+    """A2C on a multi-agent env: trains a MultiAgentA2CModel (one network per
+    agent group, A2CLoss per group), whose config (MultiAgentA2CConfig) holds
+    the loss settings."""
+    config: MultiAgentA2CTrainerConfig
+    config_cls = MultiAgentA2CTrainerConfig
+    model_cls = MultiAgentA2CModel

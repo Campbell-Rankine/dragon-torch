@@ -4,7 +4,8 @@ from dragon_torch.data.envs import DragonEnvConfig
 from dragon_torch.data.RL import EpisodeSource, RolloutSource
 from dragon_torch.loss.RL import A2CLoss, PPOLoss
 from dragon_torch.models.base import _DragonModel, model_factory
-from dragon_torch.models.RL import DragonRLConfig, DragonRLModel
+from dragon_torch.models.RL import (A2CConfig, A2CModel, DragonRLConfig, DragonRLModel, PPOConfig,
+                                    PPOModel, SingleAgentRLModel)
 from dragon_torch.modules.RL import ActorCritic, PolicyOutput
 from dragon_torch.trainers import DragonTrainer, DragonTrainerConfig
 
@@ -17,8 +18,8 @@ def build(tmp_path, source, loss=None, **cfg_kw):
     torch.manual_seed(0)
     col = source.collector
     cfg = DragonRLConfig(checkpoint_dir=tmp_path / 'ckpt', save_every=1000, **cfg_kw)
-    return DragonRLModel(ActorCritic(col.observation_space, col.action_space),
-                         loss if loss is not None else PPOLoss(), cfg)
+    return SingleAgentRLModel(ActorCritic(col.observation_space, col.action_space),
+                              loss if loss is not None else PPOLoss(), cfg)
 
 
 def adam(params):
@@ -27,12 +28,30 @@ def adam(params):
 
 class TestDragonRLModel:
     def test_registered_and_interface(self, tmp_path):
-        assert _DragonModel._registry['rl-model'] is DragonRLModel
-        assert DragonRLModel.higher_is_better and not DragonRLModel.__abstractmethods__
+        assert _DragonModel._registry['rl-model'] is SingleAgentRLModel
+        assert DragonRLModel.__abstractmethods__ >= {'act', 'value'}  # abstract base
+        assert SingleAgentRLModel.higher_is_better and not SingleAgentRLModel.__abstractmethods__
         src = RolloutSource(cartpole(1), n_steps=4, n_minibatches=1)
         cfg = DragonRLConfig(checkpoint_dir=tmp_path, save_every=1)
         module = ActorCritic(src.collector.observation_space, src.collector.action_space)
-        assert type(model_factory(module, PPOLoss(), cfg)) is DragonRLModel
+        assert type(model_factory(module, PPOLoss(), cfg)) is SingleAgentRLModel
+
+    def test_algorithm_models(self, tmp_path):
+        src = RolloutSource(cartpole(1), n_steps=4, n_minibatches=1)
+        module = lambda: ActorCritic(src.collector.observation_space, src.collector.action_space)
+        assert _DragonModel._registry['ppo-model'] is PPOModel
+        assert _DragonModel._registry['a2c-model'] is A2CModel
+        ppo = PPOModel(module(), PPOConfig(checkpoint_dir=tmp_path, save_every=1, clip_coef=0.1))
+        assert isinstance(ppo, SingleAgentRLModel) and isinstance(ppo.loss_fn, PPOLoss)
+        assert ppo.loss_fn.clip_coef == 0.1
+        a2c = A2CModel(module(), A2CConfig(checkpoint_dir=tmp_path, save_every=1, ent_coef=0.01))
+        assert isinstance(a2c.loss_fn, A2CLoss) and a2c.loss_fn.ent_coef == 0.01
+        # the config's kind picks the class; the factory's loss_fn overrides the config's
+        built = model_factory(module(), A2CLoss(vf_coef=0.9), A2CConfig(checkpoint_dir=tmp_path, save_every=1))
+        assert type(built) is A2CModel and built.loss_fn.vf_coef == 0.9
+        with pytest.raises(TypeError, match='PPOConfig'):
+            PPOModel(module(), A2CConfig(checkpoint_dir=tmp_path, save_every=1))
+        src.close()
 
     def test_act_and_value(self, tmp_path):
         src = RolloutSource(cartpole(), n_steps=4)

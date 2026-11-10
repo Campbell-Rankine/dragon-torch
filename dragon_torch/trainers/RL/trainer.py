@@ -1,15 +1,17 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar, Literal, Optional, Sequence
+from typing import Any, ClassVar, Literal, Optional, Sequence
 import torch
-from dragon_torch.data.envs import check_env_config
-from dragon_torch.data.RL import EpisodeSource, RolloutSource
-from dragon_torch.loss.RL import RLLoss
+from dragon_torch.data.envs import check_env_config, check_multi_agent_env_config
+from dragon_torch.data.RL import (EpisodeSource, MultiAgentEpisodeSource, MultiAgentRolloutSource,
+                                  RolloutSource)
+from dragon_torch.loss.RL import MultiAgentLoss, RLLoss
 from dragon_torch.models.base import DataLike, EpochCallback
-from dragon_torch.models.RL import DragonRLModel
-from dragon_torch.modules.RL import ActorCritic, DragonPolicyModule
+from dragon_torch.models.RL import DragonRLModel, MultiAgentRLModel, SingleAgentRLModel
+from dragon_torch.modules.RL import (ActorCritic, DragonPolicyModule, MultiAgentActorCritic,
+                                     MultiAgentPolicyModule, SingleAgentPolicyModule)
 from dragon_torch.trainers.base import DragonTrainer, LRSchedule, OptimizerFactory, linear_schedule
 from .callbacks import DivergenceGuard, StepEvalCallback
-from .config import DragonRLTrainerConfig
+from .config import DragonRLTrainerConfig, MultiAgentRLTrainerConfig, SingleAgentRLTrainerConfig
 
 type Direction = Literal['minimize', 'maximize']
 
@@ -23,18 +25,34 @@ class DragonRLTrainer(DragonTrainer, ABC):
             history = trainer.fit()          # trains on its own rollout source
             score = trainer.evaluate()       # mean return on its own evaluator
 
-    Subclasses implement `build_loss` (the algorithm); every other build_* hook
+    Two axes make a concrete trainer:
+      the kind of env   SingleAgentRLTrainer / MultiAgentRLTrainer implement the
+                        env-specific hooks (env check, source, evaluator,
+                        module, model, and build_loss, which adapts the
+                        algorithm's loss to the env)
+      the algorithm     a model class (`model_cls`) whose config holds the loss
+                        settings: PPOModel / MultiAgentPPOModel (PPOConfig /
+                        MultiAgentPPOConfig), likewise for A2C. build_agent_loss
+                        makes the single-agent loss from config.model
+    so PPOTrainer is a SingleAgentRLTrainer with model_cls = PPOModel and
+    MultiAgentPPOTrainer a MultiAgentRLTrainer with model_cls = MultiAgentPPOModel.
+    Every build_* hook
     can be overridden, e.g. build_module for a custom network (or pass `module=`).
     `objectives` is the default tuning objective, read by
     dragon_torch.utils.tuning.RL.rl_tune_config; the history holds every other metric too.
     """
     config: DragonRLTrainerConfig
+    # the config type this trainer accepts (checked on construction)
+    config_cls: ClassVar[type[DragonRLTrainerConfig]] = DragonRLTrainerConfig
     objectives: ClassVar[dict[str, Direction]] = {'val_return_smooth': 'maximize'}
     EVAL_STATE_KEY: ClassVar[str] = 'step_eval'
 
     def __init__(self, cfg: DragonRLTrainerConfig, module: Optional[DragonPolicyModule] = None):
+        if not isinstance(cfg, self.config_cls):
+            raise TypeError(f"{type(self).__name__} needs a {self.config_cls.__name__}, "
+                            f"got {type(cfg).__name__}")
         self.config = cfg
-        self.source: Optional[RolloutSource] = None
+        self.source: Any = None
         self.evaluator: Optional[EpisodeSource] = None
         self.eval_callback: Optional[StepEvalCallback] = None
         self.guard: Optional[DivergenceGuard] = None
@@ -56,43 +74,39 @@ class DragonRLTrainer(DragonTrainer, ABC):
             raise
 
     # ------- build hooks (called in this order) ------- #
+    @abstractmethod
     def check_envs(self) -> None:
-        """With config.validate_env, run gymnasium's env checker on one sub-env
-        of the training env as the agent sees it (wrappers applied), and on
-        eval.env if it's set separately. Runs before any vector env is built,
-        so a broken env or wrapper fails here with EnvCheckError, not mid-run."""
-        if not self.config.validate_env:
-            return
-        check_env_config(self.config.env, 'env')
-        if self.config.eval is not None and self.config.eval.env is not None:
-            check_env_config(self.config.eval.env, 'eval.env')
+        """With config.validate_env, check the training env (and eval.env if
+        it's set separately) before anything is built; raise EnvCheckError."""
 
-    def build_source(self) -> RolloutSource:
-        r = self.config.rollout
-        return RolloutSource(self.config.env, n_steps=r.n_steps, gamma=r.gamma,
-                             gae_lambda=r.gae_lambda, update_epochs=r.update_epochs,
-                             n_minibatches=r.n_minibatches, normalize_obs=r.normalize_obs,
-                             normalize_reward=r.normalize_reward)
+    @abstractmethod
+    def build_source(self) -> Any:
+        """The training data source (collects rollouts with the bound model)."""
 
+    @abstractmethod
     def build_evaluator(self) -> Optional[EpisodeSource]:
-        env = self.config.eval_env_config()
-        if env is None:
-            return None
-        e = self.config.eval
-        return EpisodeSource(env, n_episodes=e.n_episodes, deterministic=e.deterministic,
-                             max_steps=e.max_steps)
+        """The evaluation source, or None without an eval config."""
 
+    @abstractmethod
     def build_module(self) -> DragonPolicyModule:
-        col, p = self.source.collector, self.config.policy
-        return ActorCritic(col.observation_space, col.action_space, hidden=p.hidden,
-                           activation=p.activation_cls)
+        """The default policy network, built from config.policy."""
+
+    def build_agent_loss(self) -> RLLoss:
+        """The algorithm: a single-agent loss (e.g. PPOLoss), by default built
+        by the model config (`config.model.build_loss()`, as PPOConfig does)."""
+        build = getattr(self.config.model, 'build_loss', None)
+        if build is None:
+            raise NotImplementedError(
+                f"{type(self.config.model).__name__} has no loss settings (build_loss); use an "
+                "algorithm's model config (e.g. PPOConfig) or override build_agent_loss")
+        return build()
 
     @abstractmethod
     def build_loss(self) -> RLLoss:
-        """The algorithm: e.g. PPOLoss or A2CLoss built from the config."""
+        """The loss the model trains on: build_agent_loss() adapted to the env kind."""
 
-    def build_model(self, module: DragonPolicyModule, loss: RLLoss) -> DragonRLModel:
-        return DragonRLModel(module, loss, self.config.model)
+    @abstractmethod
+    def build_model(self, module: DragonPolicyModule, loss: RLLoss) -> DragonRLModel: ...
 
     def build_optimizer(self) -> OptimizerFactory:
         return self.config.optim.factory()
@@ -122,6 +136,17 @@ class DragonRLTrainer(DragonTrainer, ABC):
         """Run before caller callbacks, so those (e.g. a tuner) see val_return_smooth."""
         return [cb for cb in (self.eval_callback, self.guard) if cb is not None]
 
+    # shared by the env-kind subclasses' build_source / build_evaluator
+    def _rollout_kwargs(self) -> dict[str, Any]:
+        r = self.config.rollout
+        return dict(n_steps=r.n_steps, gamma=r.gamma, gae_lambda=r.gae_lambda,
+                    update_epochs=r.update_epochs, n_minibatches=r.n_minibatches,
+                    normalize_obs=r.normalize_obs, normalize_reward=r.normalize_reward)
+
+    def _episode_kwargs(self) -> dict[str, Any]:
+        e = self.config.eval
+        return dict(n_episodes=e.n_episodes, deterministic=e.deterministic, max_steps=e.max_steps)
+
     # ------- running ------- #
     def fit(self, train_data: Optional[DataLike] = None, val_data: Optional[DataLike] = None,
             epochs: Optional[int] = None,
@@ -148,3 +173,84 @@ class DragonRLTrainer(DragonTrainer, ABC):
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+class SingleAgentRLTrainer(DragonRLTrainer):
+    """DragonRLTrainer on a gymnasium env: RolloutSource, EpisodeSource,
+    ActorCritic and SingleAgentRLModel; the algorithm's loss is used as-is."""
+    config: SingleAgentRLTrainerConfig
+    config_cls = SingleAgentRLTrainerConfig
+    # the model class build_model makes (algorithm trainers narrow it, e.g.
+    # PPOModel); tuning presets are looked up by it (utils.tuning.presets.space_for)
+    model_cls: ClassVar[type[SingleAgentRLModel]] = SingleAgentRLModel
+
+    def check_envs(self) -> None:
+        """With config.validate_env, run gymnasium's env checker on one sub-env
+        of the training env as the agent sees it (wrappers applied), and on
+        eval.env if it's set separately. Runs before any vector env is built,
+        so a broken env or wrapper fails here with EnvCheckError, not mid-run."""
+        if not self.config.validate_env:
+            return
+        check_env_config(self.config.env, 'env')
+        if self.config.eval is not None and self.config.eval.env is not None:
+            check_env_config(self.config.eval.env, 'eval.env')
+
+    def build_source(self) -> RolloutSource:
+        return RolloutSource(self.config.env, **self._rollout_kwargs())
+
+    def build_evaluator(self) -> Optional[EpisodeSource]:
+        env = self.config.eval_env_config()
+        return None if env is None else EpisodeSource(env, **self._episode_kwargs())
+
+    def build_module(self) -> SingleAgentPolicyModule:
+        col, p = self.source.collector, self.config.policy
+        return ActorCritic(col.observation_space, col.action_space, hidden=p.hidden,
+                           activation=p.activation_cls)
+
+    def build_loss(self) -> RLLoss:
+        return self.build_agent_loss()
+
+    def build_model(self, module: SingleAgentPolicyModule, loss: RLLoss) -> SingleAgentRLModel:
+        return self.model_cls(module=module, loss_fn=loss, cfg=self.config.model)
+
+
+class MultiAgentRLTrainer(DragonRLTrainer):
+    """DragonRLTrainer on a multi-agent env (a PettingZoo-style ParallelEnv or
+    a gymnasium env with per-agent Dict spaces): MultiAgentRolloutSource,
+    MultiAgentEpisodeSource, one ActorCritic per agent group
+    (MultiAgentActorCritic) and the algorithm's loss applied per group
+    (MultiAgentLoss). Agents in a group share weights; each critic sees only
+    its agent's own obs (independent learners with parameter sharing, e.g. IPPO)."""
+    config: MultiAgentRLTrainerConfig
+    config_cls = MultiAgentRLTrainerConfig
+    # the model class build_model makes (algorithm trainers narrow it, e.g.
+    # MultiAgentPPOModel); tuning presets are looked up by it
+    model_cls: ClassVar[type[MultiAgentRLModel]] = MultiAgentRLModel
+
+    def check_envs(self) -> None:
+        """With config.validate_env, build one env of `env` (and eval.env if
+        set) with wrappers applied, group its agents and run a short random
+        rollout, raising EnvCheckError on bad spaces, obs or agent keys."""
+        if not self.config.validate_env:
+            return
+        check_multi_agent_env_config(self.config.env, 'env')
+        if self.config.eval is not None and self.config.eval.env is not None:
+            check_multi_agent_env_config(self.config.eval.env, 'eval.env')
+
+    def build_source(self) -> MultiAgentRolloutSource:
+        return MultiAgentRolloutSource(self.config.env, **self._rollout_kwargs())
+
+    def build_evaluator(self) -> Optional[MultiAgentEpisodeSource]:
+        env = self.config.eval_env_config()
+        return None if env is None else MultiAgentEpisodeSource(env, **self._episode_kwargs())
+
+    def build_module(self) -> MultiAgentPolicyModule:
+        p = self.config.policy
+        return MultiAgentActorCritic(self.source.groups.spaces_by_group(), hidden=p.hidden,
+                                     activation=p.activation_cls)
+
+    def build_loss(self) -> MultiAgentLoss:
+        return MultiAgentLoss(self.build_agent_loss())
+
+    def build_model(self, module: MultiAgentPolicyModule, loss: RLLoss) -> MultiAgentRLModel:
+        return self.model_cls(module=module, loss_fn=loss, cfg=self.config.model)

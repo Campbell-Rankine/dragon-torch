@@ -23,12 +23,14 @@ from dragon_torch.data.envs import DragonEnvConfig
 from dragon_torch.models.RL import DragonRLConfig
 from dragon_torch.trainers.RL import (A2CTrainer, A2CTrainerConfig, EvalConfig, PPOTrainer, PPOTrainerConfig)
 from dragon_torch.utils.tuning import run_study
-from dragon_torch.utils.tuning.presets import a2c_space, ppo_space
+from dragon_torch.utils.tuning.presets import space_for
 from dragon_torch.utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
+# each trainer trains one model class (PPOModel, A2CModel); its search-space
+# preset is looked up from that class
 ALGOS = {
-    'ppo': (PPOTrainer, PPOTrainerConfig, ppo_space),
-    'a2c': (A2CTrainer, A2CTrainerConfig, a2c_space),
+    'ppo': (PPOTrainer, PPOTrainerConfig),
+    'a2c': (A2CTrainer, A2CTrainerConfig),
 }
 
 
@@ -57,7 +59,7 @@ def main() -> None:
     args = p.parse_args()
 
     torch.set_num_threads(1)  # many workers x vector envs oversubscribe the CPU otherwise
-    trainer_cls, config_cls, space_fn = ALGOS[args.algo]
+    trainer_cls, config_cls = ALGOS[args.algo]
     study_name = args.study or f"{args.algo}-{args.env}"
     base = config_cls(
         env=DragonEnvConfig(env_id=args.env, n_envs=args.n_envs, seed=args.seed),
@@ -66,7 +68,7 @@ def main() -> None:
         eval=EvalConfig(every_steps=args.eval_every, n_episodes=args.eval_episodes,
                         smooth_window=args.smooth),
         seed=args.seed)
-    space = space_fn()
+    space = space_for(trainer_cls.model_cls)
     largest = max(space.params['rollout.n_steps'].choices) * args.n_envs
     if args.eval_every < largest:
         print(f"warning: --eval-every {args.eval_every} < largest epoch ({largest} steps); "

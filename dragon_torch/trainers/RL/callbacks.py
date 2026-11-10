@@ -22,6 +22,7 @@ class StepEvalCallback:
       {metric}_raw, {metric}_shaped
                         both returns, when the evaluator's env has wrappers
                         (so they can differ) and the model reports them
+      {metric}/<group>  multi-agent models: each agent group's mean return
       eval_step         the scheduled step this evaluation stands for: the
                         largest multiple of every_steps crossed, capped at
                         total_steps. Epoch sizes (n_envs x n_steps) differ between
@@ -73,6 +74,9 @@ class StepEvalCallback:
         if getattr(self.evaluator, 'shaped', False) and stats:
             record[f"{self.metric}_raw"] = stats['return']
             record[f"{self.metric}_shaped"] = stats['shaped_return']
+        for key, v in (stats or {}).items():   # multi-agent: each group's mean return
+            if key.startswith('return/'):
+                record[f"{self.metric}/{key.removeprefix('return/')}"] = v
         record[EVAL_STEP_KEY] = due
 
     def state_dict(self) -> dict[str, Any]:

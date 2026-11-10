@@ -1,18 +1,20 @@
-from typing import Optional
-from dragon_torch.loss.RL import PPOLoss
-from dragon_torch.modules.RL import DragonPolicyModule
-from dragon_torch.trainers.RL.trainer import DragonRLTrainer
-from .config import PPOTrainerConfig
+from dragon_torch.models.RL import MultiAgentPPOModel, PPOModel
+from dragon_torch.trainers.RL.trainer import MultiAgentRLTrainer, SingleAgentRLTrainer
+from .config import MultiAgentPPOTrainerConfig, PPOTrainerConfig
 
 
-class PPOTrainer(DragonRLTrainer):
-    """Proximal Policy Optimisation over a DragonRLTrainer run."""
+class PPOTrainer(SingleAgentRLTrainer):
+    """PPO on a gymnasium env: trains a PPOModel, whose config (PPOConfig) holds
+    the loss settings."""
     config: PPOTrainerConfig
+    config_cls = PPOTrainerConfig
+    model_cls = PPOModel
 
-    def __init__(self, cfg: PPOTrainerConfig, module: Optional[DragonPolicyModule] = None):
-        if not isinstance(cfg, PPOTrainerConfig):
-            raise TypeError(f"PPOTrainer needs a PPOTrainerConfig, got {type(cfg).__name__}")
-        super().__init__(cfg, module)
 
-    def build_loss(self) -> PPOLoss:
-        return PPOLoss(**self.config.ppo.model_dump())
+class MultiAgentPPOTrainer(MultiAgentRLTrainer):
+    """PPO on a multi-agent env: trains a MultiAgentPPOModel (one network per
+    agent group, PPOLoss per group), whose config (MultiAgentPPOConfig) holds
+    the loss settings."""
+    config: MultiAgentPPOTrainerConfig
+    config_cls = MultiAgentPPOTrainerConfig
+    model_cls = MultiAgentPPOModel

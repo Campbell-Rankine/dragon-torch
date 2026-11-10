@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "jax",
-    "optuna>=5.0.0",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.4",
     "requests>=2.34.2",
@@ -26,12 +25,13 @@ dragon-tune = "dragon_torch.utils.tuning.monitor:main"
 
 test=["pytest>=9.1.1"]
 
-tune=["optuna-dashboard"]
+tune=["optuna-dashboard", "optuna>=5.0.0",]
 
 RL=[
   "stable-retro[extra]",
   "stable-baselines3",
   "gymnasium>=1.1",
+  "pettingzoo>=1.27.0"
 ]
 
 torch-ext=[

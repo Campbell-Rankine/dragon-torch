@@ -1,13 +1,17 @@
 import json
-import optuna
 import pytest
+
+optuna = pytest.importorskip('optuna', reason="tuning needs the 'tune' extra")
 from dragon_torch.data.envs import DragonEnvConfig
 from dragon_torch.models.RL import DragonRLConfig
 from dragon_torch.trainers.RL import (EVAL_STEP_KEY, A2CTrainer, A2CTrainerConfig, EvalConfig, GuardConfig,
-                         OptimConfig, PPOTrainer, PPOTrainerConfig)
+                         MultiAgentA2CTrainer, MultiAgentA2CTrainerConfig, MultiAgentPPOTrainer,
+                         MultiAgentPPOTrainerConfig, OptimConfig, PPOTrainer, PPOTrainerConfig)
 from dragon_torch.utils.tuning import (CategoricalParam, DragonObjective, FloatParam, IntParam, SearchSpace,
                           TrialSpec, read_history, run_study)
-from dragon_torch.utils.tuning.presets import a2c_space, ppo_space
+from dragon_torch.models.RL import (A2CConfig, A2CModel, MultiAgentA2CConfig, MultiAgentPPOConfig,
+                                    MultiAgentPPOModel, PPOConfig, PPOModel, SingleAgentRLModel)
+from dragon_torch.utils.tuning.presets import PRESETS, a2c_space, ppo_space, register_preset, space_for
 from dragon_torch.utils.tuning.RL import RLTrialBuilder, rl_tune_config
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -39,16 +43,55 @@ class TestSearchSpace:
         assert SearchSpace.model_validate_json(space.model_dump_json()) == space
 
     def test_presets_match_their_configs(self, tmp_path):
-        """Every preset key is a real config path."""
+        """Every preset key is a real config path, and the loss settings land
+        on the algorithm's model config."""
         model = DragonRLConfig(checkpoint_dir=tmp_path, save_every=1, total_timesteps=1000)
-        for space, cfg_cls in ((ppo_space(), PPOTrainerConfig), (a2c_space(), A2CTrainerConfig)):
-            builder = RLTrialBuilder(trainer_cls=PPOTrainer,
+        for trainer_cls, cfg_cls, model_cfg_cls, loss_key in (
+                (PPOTrainer, PPOTrainerConfig, PPOConfig, 'model.clip_coef'),
+                (A2CTrainer, A2CTrainerConfig, A2CConfig, 'model.vf_coef')):
+            builder = RLTrialBuilder(trainer_cls=trainer_cls,
                                      base_config=cfg_cls(env=DragonEnvConfig(env_id='CartPole-v1'),
                                                          model=model))
-            params = space.suggest(optuna.create_study().ask())
+            params = space_for(trainer_cls).suggest(optuna.create_study().ask())
             cfg = builder.config_for(params, tmp_path / 't')
+            assert type(cfg.model) is model_cfg_cls
             assert cfg.rollout.n_steps == params['rollout.n_steps']
+            assert getattr(cfg.model, loss_key.split('.')[1]) == params[loss_key]
             assert cfg.model.checkpoint_dir == tmp_path / 't' / 'ckpt'
+
+    def test_presets_apply_to_multi_agent_configs(self, tmp_path):
+        """Every preset key is also a real multi-agent config path."""
+        from dragon_torch.data.envs import MultiAgentEnvConfig
+        model = DragonRLConfig(checkpoint_dir=tmp_path, save_every=1, total_timesteps=1000)
+        env = MultiAgentEnvConfig(env_fn=lambda: None)  # configs only: no env is built
+        for trainer_cls, cfg_cls, model_cfg_cls in (
+                (MultiAgentPPOTrainer, MultiAgentPPOTrainerConfig, MultiAgentPPOConfig),
+                (MultiAgentA2CTrainer, MultiAgentA2CTrainerConfig, MultiAgentA2CConfig)):
+            builder = RLTrialBuilder(trainer_cls=trainer_cls,
+                                     base_config=cfg_cls(env=env, model=model))
+            params = space_for(trainer_cls).suggest(optuna.create_study().ask())
+            cfg = builder.config_for(params, tmp_path / 't')
+            assert type(cfg.model) is model_cfg_cls
+            assert all(params[k] == getattr(cfg.model, k.split('.')[1])
+                       for k in params if k.startswith('model.'))
+
+    def test_space_for(self, tmp_path):
+        assert space_for(PPOModel) == ppo_space() and space_for(A2CModel) == a2c_space()
+        assert space_for(PPOTrainer) == ppo_space() and space_for(A2CTrainer) == a2c_space()
+        # one preset per algorithm, whatever the kind of run
+        assert space_for(MultiAgentPPOModel) == ppo_space()
+        assert space_for(MultiAgentA2CTrainer) == a2c_space()
+
+        class TunedPPO(PPOModel):
+            pass
+        assert space_for(TunedPPO) == ppo_space()  # inherited
+        with pytest.raises(KeyError, match='no search-space preset for SingleAgentRLModel'):
+            space_for(SingleAgentRLModel)
+        try:
+            register_preset(TunedPPO, lambda: ppo_space().without('model.clip_coef'))
+            assert 'model.clip_coef' not in space_for(TunedPPO).params
+        finally:
+            PRESETS.pop(TunedPPO, None)
 
 
 class TestRLTuneConfig:

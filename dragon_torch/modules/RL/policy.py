@@ -1,12 +1,13 @@
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Distribution
 from gymnasium import spaces
-from dragon_torch.modules.base import DragonModule
+from dragon_torch.common.torch.tree import Tree
+from dragon_torch.modules.base import DragonModule, ModelDtype
 from dragon_torch.modules.RL.heads import layer_init, make_dist_head
 
 
@@ -16,11 +17,30 @@ class PolicyOutput:
     value: Optional[torch.Tensor] = None  # [B]; None for actor-only policies
 
 
-class DragonPolicyModule(DragonModule[PolicyOutput]):
-    """A DragonModule whose forward(obs) returns a PolicyOutput."""
+class DragonPolicyModule(DragonModule[ModelDtype]):
+    """Base of every RL policy network. Single-agent policies return one
+    PolicyOutput; multi-agent policies return one per agent group."""
+
+    @abstractmethod
+    def forward(self, X: Any, **kwargs) -> ModelDtype: ...
+
+
+class SingleAgentPolicyModule(DragonPolicyModule[PolicyOutput]):
+    """forward(obs [B, ...]) -> PolicyOutput with batch shape [B]."""
 
     @abstractmethod
     def forward(self, X: Any, **kwargs) -> PolicyOutput: ...
+
+
+class MultiAgentPolicyModule(DragonPolicyModule[dict[str, PolicyOutput]]):
+    """forward({group: obs [B_g, ...]}) -> {group: PolicyOutput [B_g]}.
+
+    Agents in a group share the group's weights, so each group's obs arrive
+    flattened over (env, agent): B_g = batch x agents in the group. Groups
+    absent from X (no live agents in a minibatch) are absent from the output."""
+
+    @abstractmethod
+    def forward(self, X: Mapping[str, Tree], **kwargs) -> dict[str, PolicyOutput]: ...
 
 
 class FlattenObs(nn.Module):
@@ -53,7 +73,7 @@ def mlp(in_features: int, hidden: Sequence[int], activation: type[nn.Module] = n
     return nn.Sequential(*layers)
 
 
-class ActorCritic(DragonPolicyModule):
+class ActorCritic(SingleAgentPolicyModule):
     """Actor-critic for on-policy algorithms (PPO, A2C).
 
     Default: separate MLP trunks for actor and critic over flattened obs (the
@@ -89,3 +109,36 @@ class ActorCritic(DragonPolicyModule):
             actor_features, critic_features = self.actor_trunk(X), self.critic_trunk(X)
         return PolicyOutput(dist=self.actor_head(actor_features),
                             value=self.critic_head(critic_features).squeeze(-1))
+
+
+class MultiAgentActorCritic(MultiAgentPolicyModule):
+    """One ActorCritic per agent group (weights shared within a group,
+    independent across groups; each critic sees only its agent's obs).
+
+        MultiAgentActorCritic({'red': (obs_space, act_space), 'blue': (...)}, hidden=(64, 64))
+
+    `policies` maps group -> ActorCritic directly, for custom per-group networks.
+    """
+    kind = 'multi-agent-actor-critic'
+
+    def __init__(self, spaces_by_group: Optional[Mapping[str, tuple[spaces.Space, spaces.Space]]] = None,
+                 policies: Optional[Mapping[str, SingleAgentPolicyModule]] = None, **actor_critic_kw: Any):
+        super().__init__()
+        if (spaces_by_group is None) == (policies is None):
+            raise ValueError("pass exactly one of spaces_by_group or policies")
+        if policies is None:
+            policies = {g: ActorCritic(obs, act, **actor_critic_kw)
+                        for g, (obs, act) in spaces_by_group.items()}
+        if not policies:
+            raise ValueError("MultiAgentActorCritic needs at least one group")
+        self.policies = nn.ModuleDict(dict(policies))
+
+    @property
+    def groups(self) -> list[str]:
+        return list(self.policies.keys())
+
+    def forward(self, X: Mapping[str, Tree], **kw) -> dict[str, PolicyOutput]:
+        unknown = set(X) - set(self.policies)
+        if unknown:
+            raise KeyError(f"obs for unknown groups {sorted(unknown)}; module groups: {self.groups}")
+        return {g: self.policies[g](obs, **kw) for g, obs in X.items()}

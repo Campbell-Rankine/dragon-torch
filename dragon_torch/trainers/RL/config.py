@@ -1,16 +1,26 @@
 """Configs for DragonRLTrainer: one config describes a whole RL run.
 
-    DragonRLTrainerConfig
-      env      DragonEnvConfig      what to train on
+    DragonRLTrainerConfig               sections shared by every RL run
+      SingleAgentRLTrainerConfig        env: DragonEnvConfig (gymnasium)
+      MultiAgentRLTrainerConfig         env: MultiAgentEnvConfig (ParallelEnv /
+                                        gymnasium Dict-space multi-agent env)
+
+      env      env config           what to train on
       model    DragonRLConfig       checkpoints, total_timesteps, grad clipping, device
+                                    (algorithm configs narrow it, e.g. PPOConfig
+                                    carries the PPO loss settings)
       rollout  RolloutConfig        RolloutSource settings (GAE, minibatching, normalisation)
       eval     EvalConfig | None    step-scheduled evaluation (StepEvalCallback)
-      policy   PolicyConfig         default ActorCritic network
+      policy   PolicyConfig         default ActorCritic network (one per agent group
+                                    for multi-agent runs)
       optim    OptimConfig          optimizer + linear lr annealing
       guard    GuardConfig | None   DivergenceGuard
       seed                          torch seed for network init
 
-Algorithm configs (PPOTrainerConfig, A2CTrainerConfig) add their loss section.
+Algorithm configs exist for both kinds and take the algorithm's model config,
+which holds the loss settings: PPOTrainerConfig -> PPOConfig,
+MultiAgentPPOTrainerConfig -> MultiAgentPPOConfig, and likewise for A2C. The
+loss settings are `model.clip_coef`, ... in every one of them.
 `apply_overrides(cfg, {'rollout.n_steps': 256, 'optim.lr': 3e-4})` sets
 nested fields by dotted path, which is how tuning parameters map onto a config.
 """
@@ -18,8 +28,8 @@ import warnings
 from typing import Any, Literal, Mapping, Optional, TypeVar
 import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from dragon_torch.data.envs import DragonEnvConfig
-from dragon_torch.models.RL import DragonRLConfig
+from dragon_torch.data.envs import DragonEnvConfig, MultiAgentEnvConfig
+from dragon_torch.models.RL import DragonRLConfig, MultiAgentRLConfig
 from dragon_torch.trainers.base import DragonTrainerConfig, OptimizerFactory
 
 ACTIVATIONS: dict[str, type[torch.nn.Module]] = {
@@ -114,9 +124,12 @@ class GuardConfig(BaseModel):
 
 
 class DragonRLTrainerConfig(DragonTrainerConfig):
+    """Sections shared by single- and multi-agent runs. Build runs from
+    SingleAgentRLTrainerConfig / MultiAgentRLTrainerConfig (or an algorithm's
+    config), which fix the env type."""
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    env: DragonEnvConfig
+    env: Any
     model: DragonRLConfig
     rollout: RolloutConfig = Field(default_factory=RolloutConfig)
     eval: Optional[EvalConfig] = None
@@ -150,13 +163,55 @@ class DragonRLTrainerConfig(DragonTrainerConfig):
                           "every epoch evaluates and scheduled steps get skipped", stacklevel=2)
         return self
 
-    def eval_env_config(self) -> Optional[DragonEnvConfig]:
+    def eval_env_config(self) -> Any:
         if self.eval is None:
             return None
         if self.eval.env is not None:
             return self.eval.env
         return self.env.model_copy(update={'n_envs': self.eval.n_envs,
                                            'seed': self.env.seed + self.eval.seed_offset})
+
+
+ModelConfigT = TypeVar('ModelConfigT', bound=DragonRLConfig)
+
+
+def upgrade_model_config(value: Any, target: type[ModelConfigT]) -> Any:
+    """For a config's `model` field: a DragonRLConfig of another type becomes
+    a `target`, keeping the settings of every config class the two share:
+    the DragonRLConfig ones (checkpoint_dir, total_timesteps, ...) always,
+    and an algorithm's loss settings when both are that algorithm's (PPOConfig
+    -> MultiAgentPPOConfig keeps clip_coef; A2CConfig -> PPOConfig doesn't).
+    The rest take target's defaults; a `kind` left at its class default becomes
+    target's default kind. Anything else (a dict, a `target` already) is
+    returned for normal validation."""
+    if not isinstance(value, DragonRLConfig) or isinstance(value, target):
+        return value
+    shared = {name for base in type(value).__mro__
+              if isinstance(base, type) and issubclass(base, BaseModel) and issubclass(target, base)
+              for name in base.model_fields}
+    data = value.model_dump(include=shared)
+    if data.get('kind') == type(value).model_fields['kind'].default:
+        data.pop('kind')
+    return target(**data)
+
+
+class SingleAgentRLTrainerConfig(DragonRLTrainerConfig):
+    """A run on a (vectorised) gymnasium env."""
+    env: DragonEnvConfig
+
+
+class MultiAgentRLTrainerConfig(DragonRLTrainerConfig):
+    """A run on a multi-agent env. Agent groups, and how the team return is
+    scored, are part of the env config (MultiAgentEnvConfig.groups /
+    team_return). `model` accepts a plain DragonRLConfig too; it becomes a
+    MultiAgentRLConfig (kind 'marl-model')."""
+    env: MultiAgentEnvConfig
+    model: MultiAgentRLConfig
+
+    @field_validator('model', mode='before')
+    @classmethod
+    def _multi_agent_model(cls, v: Any) -> Any:
+        return upgrade_model_config(v, MultiAgentRLConfig)
 
 
 ConfigT = TypeVar('ConfigT', bound=BaseModel)

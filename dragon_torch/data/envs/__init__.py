@@ -6,3 +6,6 @@ from .registry import (WrapperSpec, register_wrapper, registered_wrappers, resol
 from .normalize import ObsNormalizer, RewardScaler, RunningMeanStd
 from .spaces import action_to_env, flatdim, obs_to_tensor
 from .wrappers import RAW_REWARD_KEY, Discretizer, RecordRawReward
+from .multi_agent import (AgentGroups, GymMultiAgentEnv, MultiAgentEnvConfig, MultiAgentStep,
+                          MultiAgentVectorEnv, check_multi_agent_env_config, is_parallel_env,
+                          make_multi_agent_env)
