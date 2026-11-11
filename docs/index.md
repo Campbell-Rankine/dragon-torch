@@ -22,6 +22,7 @@ dragon-torch is a PyTorch research framework built around reinforcement learning
 | Page | Contents |
 |---|---|
 | [Multi-agent RL](multi_agent.md) | Multi-agent envs, agent groups, batching and metrics |
+| [Replay-buffer algorithms](implementations.md) | Planned off-policy, offline and model-based algorithms: networks, policies, updates |
 | [Raw and shaped rewards](envs.md#raw-and-shaped-rewards) | What `val_return` measures when wrappers shape the reward |
 | [Normalisation](envs.md#normalisation) | Why normalisation lives in the rollout config, not in wrappers |
 

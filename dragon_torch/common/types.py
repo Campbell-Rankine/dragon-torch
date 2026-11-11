@@ -13,6 +13,7 @@ type PathLike = Union[Path, str]
 # ------- DatasetDefinition ------- #
 type BackendTypes = Union[Literal['jax'],
                           Literal['numpy'], Literal['pandas'], Literal['torch']]
+
 type DatasetSplitType = Union[Literal['train'],
                               Literal['test'], Literal['valid']]
 
