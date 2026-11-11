@@ -1,19 +1,21 @@
-from typing import Any
+from typing import Any, Generic
 import numpy as np
 import torch
-from .base import _ReplayBuffer, DeviceLike, ReplaySample
+from .base import _ReplayBuffer, DeviceLike, ReplaySample, ReplayDtype
 
+class _UniformReplayBuffer(_ReplayBuffer[ReplayDtype], Generic[ReplayDtype]):
+    """Uniform sampling shared by the numpy and torch buffers.
 
-class UniformReplayBuffer(_ReplayBuffer[np.ndarray]):
-    """Uniform Sampling Replay Buffer"""
-    kind = 'uniform'
+    Indices are always drawn from the seeded numpy RNG, so both backends draw
+    the same batches for the same seed.
+    """
 
-    def add(self, obs: np.ndarray, action: np.ndarray, reward: np.ndarray, next_obs: np.ndarray,
-            terminated: np.ndarray, truncated: np.ndarray) -> None:
+    def add(self, obs: Any, action: Any, reward: Any, next_obs: Any,
+            terminated: Any, truncated: Any) -> None:
         """Add one env step, or one vector-env step with a leading ``n_envs`` dim.
 
         Args:
-            obs: Observation, ``obs_dim`` or ``(n_envs, *obs_dim)``
+            obs: Observation, ``obs_dim`` or ``(n_envs, *obs_dim)``; numpy or torch
             action: Action
             reward: Reward
             next_obs: True successor observation (the final obs where an episode ended)
@@ -22,25 +24,6 @@ class UniformReplayBuffer(_ReplayBuffer[np.ndarray]):
         """
         self._store(self._batch(obs=obs, next_obs=next_obs, actions=action, rewards=reward,
                                 terminated=terminated, truncated=truncated))
-
-    def _sample_idxs(self, batch_size: int, replace: bool) -> np.ndarray:
-        if self.size == 0:
-            raise ValueError("cannot sample from an empty replay buffer")
-        # positions 0..size-1 are always the filled ones: the buffer only wraps once full
-        return self.rng.choice(self.size, batch_size, replace=replace)
-
-    def _gather(self, idxs: np.ndarray) -> ReplaySample:
-        return ReplaySample(self.obs[idxs], self.actions[idxs], self.rewards[idxs],
-                            self.next_obs[idxs], self.terminated[idxs], self.truncated[idxs], idxs)
-
-    def _output(self, x: Any, to_tensor: bool, device: DeviceLike | None) -> Any:
-        """Convert a gathered array or ``ReplaySample`` for the caller."""
-        if not to_tensor:
-            return x
-        device = self.device if device is None else device
-        if isinstance(x, ReplaySample):
-            return ReplaySample(*(torch.as_tensor(v, device=device) for v in x))
-        return torch.as_tensor(x, device=device)
 
     def sample(self, batch_size: int, replace: bool = True, use_cer: bool = False,
                to_tensor: bool = False, device: DeviceLike | None = None) -> ReplaySample:
@@ -62,7 +45,7 @@ class UniformReplayBuffer(_ReplayBuffer[np.ndarray]):
         return self._output(self._gather(idxs), to_tensor, device)
 
     def sample_obs(self, batch_size: int, replace: bool = True, to_tensor: bool = False,
-                   device: DeviceLike | None = None) -> np.ndarray | torch.Tensor:
+                   device: DeviceLike | None = None) -> ReplayDtype:
         """Sample a batch of observations from the buffer.
 
         Args:
@@ -93,7 +76,32 @@ class UniformReplayBuffer(_ReplayBuffer[np.ndarray]):
         return self._gather(idxs)
 
 
-class TorchUniformReplayBuffer(UniformReplayBuffer):
+    def _sample_idxs(self, batch_size: int, replace: bool) -> np.ndarray:
+        if self.size == 0:
+            raise ValueError("cannot sample from an empty replay buffer")
+        # positions 0..size-1 are always the filled ones: the buffer only wraps once full
+        return self.rng.choice(self.size, batch_size, replace=replace)
+
+    def _gather(self, idxs: np.ndarray) -> ReplaySample:
+        return ReplaySample(self.obs[idxs], self.actions[idxs], self.rewards[idxs],
+                            self.next_obs[idxs], self.terminated[idxs], self.truncated[idxs], idxs)
+
+    def _output(self, x: Any, to_tensor: bool, device: DeviceLike | None) -> Any:
+        """Convert a gathered array or ``ReplaySample`` for the caller."""
+        if not to_tensor:
+            return x
+        device = self.device if device is None else device
+        if isinstance(x, ReplaySample):
+            return ReplaySample(*(torch.as_tensor(v, device=device) for v in x))
+        return torch.as_tensor(x, device=device)
+
+
+class UniformReplayBuffer(_UniformReplayBuffer[np.ndarray]):
+    """Uniform Sampling Replay Buffer"""
+    kind = 'uniform-numpy'
+
+
+class TorchUniformReplayBuffer(_UniformReplayBuffer[torch.Tensor]):
     """Uniform replay stored as torch tensors on ``device``.
 
     Sampling returns tensors on the buffer's device (``idxs`` included), so
@@ -101,7 +109,6 @@ class TorchUniformReplayBuffer(UniformReplayBuffer):
     Indices are drawn from the same seeded numpy RNG as ``UniformReplayBuffer``.
     """
     kind = 'torch-uniform'
-    backend = torch.Tensor
 
     def _gather(self, idxs: np.ndarray) -> ReplaySample:
         return super()._gather(torch.as_tensor(idxs, dtype=torch.long, device=self.device))
